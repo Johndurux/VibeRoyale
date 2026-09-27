@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>VibeRoyale &middot; the arena</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%236FC7F0'/%3E%3Cpath d='M6 26 L6 14 L10 18 L16 8 L22 18 L26 14 L26 26 Z' fill='%23FFC94A' stroke='%231A1A1A' stroke-width='2'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <!-- Baloo 2 carries every label, Bungee carries every number. Two halves of
+       one type system on purpose: Baloo 2 is round and soft enough to sit on a
+       card, Bungee is blocky and loud enough to survive being stamped onto a
+       tower inside a 3D scene. The towers' own HP screens are drawn in Bungee
+       on a canvas, so the HUD and the screens it mirrors are visibly the same
+       instrument. -->
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Bungee&display=swap">
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"
+      }
+    }
+  </script>
+
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; -webkit-user-select: none; }
+
+    :root {
+      /* -- art direction tokens ------------------------------------------
+         Every colour in the HUD is one of these. Nothing below hard-codes a
+         hex: the 3D world reads the same values out of config.js, and if the
+         two drift the overlay starts reading as a different game wearing the
+         same screen, which is exactly what the old dark-on-dark HUD did. */
+      --vr-bg-sky-top: #6FC7F0;
+      --vr-bg-sky-bottom: #FFD98A;
+      --vr-gold-border: #FFC94A;
+      --vr-gold-shadow: #B8860B;
+      --vr-hp-green: #6FCF3E;
+      --vr-danger-red: #FF5C4D;
+      --vr-rarity-common: #B0B0B0;
+      --vr-rarity-rare: #FF9F45;
+      --vr-rarity-epic: #A259FF;
+      --vr-rarity-legendary: linear-gradient(135deg,#FFD700 0%,#FF69B4 38%,#00C2FF 72%,#FFD700 100%);
+      --vr-font-outline: #1A1A1A;
+
+      /* derived, so a single edit re-tints the whole overlay */
+      --gold-lo: #FFE9A8;
+      --gold-hi: #FFF3CE;
+      --parchment: #FFF6E2;
+      --parchment-2: #F0E0BC;
+      --team-player: #3D8BE8;
+      --team-enemy: #E04A3F;
+      --elixir: #D946EF;
+      --elixir-hi: #F5A9FF;
+
+      --font: 'Baloo 2', 'Trebuchet MS', system-ui, sans-serif;
+      --font-num: 'Bungee', 'Baloo 2', 'Trebuchet MS', sans-serif;
+
+      /* The signature CR drop: a hard offset shadow under a gold rim. A soft
+         blur is the clearest tell of a generated UI. */
+      --drop: 0 4px 0 var(--vr-gold-shadow), 0 6px 12px rgba(0, 0, 0, 0.38);
+      --lift: 0 7px 0 var(--vr-gold-shadow), 0 12px 20px rgba(0, 0, 0, 0.42);
+    }
+
+    html, body {
+      width: 100%; height: 100%; overflow: hidden;
+      background: var(--vr-bg-sky-top);
+      font-family: var(--font);
+      -webkit-font-smoothing: antialiased;
+    }
+
+    #webgl { position: absolute; inset: 0; width: 100%; height: 100%; display: block; z-index: 1; }
+
+    #hud {
+      position: absolute; inset: 0; z-index: 10;
+      display: flex; flex-direction: column; justify-content: space-between;
+      padding: 12px; gap: 10px; pointer-events: none;
+    }
+
+    .bar-top, .bar-bottom { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+    .bar-bottom { align-items: flex-end; }
+    .mid { flex: 1; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+
+    /* -- wordmark -------------------------------------------------------- */
+    .brand { display: flex; align-items: center; gap: 9px; }
+    .brand-mark {
+      width: 26px; height: 26px;
+      background: linear-gradient(160deg, var(--gold-hi), var(--vr-gold-border) 55%, var(--vr-gold-shadow));
+      border: 2px solid var(--vr-font-outline); border-radius: 7px;
+      box-shadow: var(--drop);
+    }
+    .brand-text {
+      font-size: 15px; font-weight: 800; line-height: 1.05; color: var(--parchment);
+      -webkit-text-stroke: 3px var(--vr-font-outline);
+      paint-order: stroke fill;
+      text-shadow: 0 3px 0 var(--vr-gold-shadow);
+    }
+    .brand-text span {
+      display: block; font-size: 9px; font-weight: 700; letter-spacing: 2px;
+      color: var(--gold-lo); -webkit-text-stroke: 2.5px var(--vr-font-outline); paint-order: stroke fill;
+    }
+
+    .tag {
+      font-size: 11px; font-weight: 700; letter-spacing: 1px; color: var(--parchment);
+      background: linear-gradient(180deg, var(--gold-hi), var(--vr-gold-border) 60%, var(--vr-gold-shadow));
+      border: 2px solid var(--vr-font-outline); border-radius: 10px;
+      padding: 5px 12px; box-shadow: var(--drop);
+    }
+    .tag b { color: #7A4B00; }
+
+    /* -- tower banners ---------------------------------------------------
+       A gold rim around a parchment face, with a swallow-tail notch cut into
+       the bottom so it reads as a hanging banner, not a settings box. */
+    .panel {
+      width: 214px; padding: 8px 10px 14px;
+      background: linear-gradient(180deg, var(--gold-hi), var(--vr-gold-border) 46%, var(--vr-gold-shadow));
+      border: 3px solid var(--vr-font-outline); border-radius: 14px;
+      box-shadow: var(--drop);
+      clip-path: polygon(0 0, 100% 0, 100% calc(100% - 13px), 88% 100%, 12% calc(100% - 13px), 0 calc(100% - 13px));
+    }
+    .panel-inner {
+      background: linear-gradient(180deg, var(--parchment), var(--parchment-2));
+      border: 2px solid rgba(120, 90, 30, 0.35); border-radius: 9px;
+      padding: 7px 9px 9px;
+    }
+    .panel-head {
+      display: flex; align-items: center; justify-content: space-between;
+      font-size: 11px; font-weight: 800; letter-spacing: 1px; color: #6B4A12;
+      border-bottom: 2px solid rgba(120, 90, 30, 0.3); padding-bottom: 5px; margin-bottom: 7px;
+    }
+    .panel-head b {
+      font-family: var(--font-num); font-size: 16px; font-weight: 400;
+      color: var(--team-player);
+      -webkit-text-stroke: 3px var(--vr-font-outline); paint-order: stroke fill;
+    }
+    .panel.rival .panel-head b { color: var(--team-enemy); }
+    .panel.rival { background: linear-gradient(180deg, #FFD9C0, #FFB08A 46%, #C4553F); }
+
+    .row { display: flex; align-items: center; gap: 7px; margin-bottom: 6px; }
+    .row:last-child { margin-bottom: 0; }
+    .row-label { font-size: 10px; font-weight: 700; color: #6B4A12; width: 30px; flex: none; }
+    /* The track is a shield silhouette: rounded shoulders, blunt base. The
+       fill lives inside the same border-radius, so a half-full bar drains to a
+       shield half rather than to a rectangle. */
+    .bar {
+      position: relative; flex: 1; height: 17px;
+      background: #4A3A22; border: 2px solid var(--vr-gold-shadow);
+      border-radius: 9px 9px 4px 4px; overflow: hidden;
+      box-shadow: inset 0 2px 0 rgba(0, 0, 0, 0.35);
+    }
+    .bar > i {
+      display: block; height: 100%; width: 100%;
+      background: linear-gradient(180deg, #9BE86A 0%, var(--vr-hp-green) 45%, #46A020 100%);
+      box-shadow: inset 0 -3px 0 rgba(0, 0, 0, 0.22);
+      transition: width 180ms steps(6);
+    }
+    .bar.is-ko::after {
+      content: ''; position: absolute; inset: 0;
+      background: repeating-linear-gradient(45deg, transparent 0 5px, rgba(92, 38, 32, 0.5) 5px 8px);
+    }
+    .row-pct {
+      font-family: var(--font-num); font-size: 11px; width: 40px; text-align: right; flex: none;
+      color: #4A3A22; letter-spacing: -0.5px;
+    }
+
+    /* -- elixir ---------------------------------------------------------- */
+    .elixir {
+      display: flex; align-items: center; gap: 10px;
+      background: linear-gradient(180deg, var(--gold-hi), var(--vr-gold-border) 55%, var(--vr-gold-shadow));
+      border: 3px solid var(--vr-font-outline); border-radius: 16px;
+      padding: 5px 14px 5px 8px; box-shadow: var(--drop);
+    }
+    .elixir-track {
+      position: relative; width: 210px; height: 24px; border-radius: 12px;
+      background: #2B1030; border: 2px solid var(--vr-font-outline);
+      overflow: hidden; box-shadow: inset 0 3px 6px rgba(0, 0, 0, 0.55);
+    }
+    .elixir-track > i {
+      display: block; height: 100%; width: 50%;
+      background: linear-gradient(180deg, var(--elixir-hi) 0%, var(--elixir) 50%, #8B1A9E 100%);
+      box-shadow: 0 0 14px rgba(217, 70, 239, 0.85);
+      transition: width 320ms steps(8);
+    }
+    /* Segment dividers, so the bar reads as ten discrete drops. */
+    .elixir-track::after {
+      content: ''; position: absolute; inset: 0;
+      background: repeating-linear-gradient(90deg, transparent 0 calc(10% - 2px), rgba(20, 6, 24, 0.55) calc(10% - 2px) 10%);
+    }
+    .elixir-num {
+      font-family: var(--font-num); font-size: 26px; line-height: 1; min-width: 34px; text-align: center;
+      color: #FFF6D8; text-shadow: 0 0 12px var(--elixir-hi), 0 0 26px var(--elixir), 0 3px 0 #6B0F7A;
+    }
+
+    /* -- roster: the card deck ------------------------------------------
+       Three stacked transforms, in order: a CSS perspective on the wrap, a
+       rotateX on the row so the cards lie down like a hand, and a translateZ
+       lift on the selected one. The rim is a second background layer clipped
+       to the border box, which is how one element carries both a
+       rarity-coloured rim and an opaque card face. */
+    .roster-wrap { display: flex; flex-direction: column; align-items: flex-end; gap: 7px; perspective: 700px; }
+    #rosterHint {
+      font-size: 10px; font-weight: 800; letter-spacing: 2px; color: var(--parchment);
+      -webkit-text-stroke: 2.5px var(--vr-font-outline); paint-order: stroke fill;
+    }
+    #roster { display: flex; gap: 7px; pointer-events: auto; transform: rotateX(14deg); }
+
+    .chip {
+      --c: var(--vr-rarity-common);
+      --rim: var(--vr-rarity-common);
+      position: relative;
+      width: 66px; padding: 4px 4px 6px;
+      background:
+        linear-gradient(180deg, #FFF6E2, #EBD3A4) padding-box,
+        var(--rim) border-box;
+      border: 3px solid transparent; border-radius: 12px;
+      color: #3A2A12; font-family: var(--font); cursor: pointer;
+      display: flex; flex-direction: column; align-items: center; gap: 2px;
+      box-shadow: 0 4px 0 rgba(0, 0, 0, 0.42);
+      transition: transform 110ms steps(2), box-shadow 110ms steps(2);
+    }
+    .chip:hover { transform: translateY(-4px); box-shadow: 0 8px 0 rgba(0, 0, 0, 0.42); }
+    .chip[aria-pressed="true"] {
+      transform: translateY(-9px) translateZ(40px);
+      box-shadow: 0 10px 0 var(--vr-gold-shadow), 0 0 20px rgba(255, 201, 74, 0.7);
+    }
+    .chip:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+    .chip-face { display: block; width: 50px; height: 50px; border: 2px solid var(--vr-font-outline); border-radius: 8px; overflow: hidden; }
+    .chip-face canvas { display: block; width: 50px; height: 50px; }
+    .chip-name { font-size: 9px; font-weight: 800; letter-spacing: 0.2px; line-height: 1.1; }
+    .chip-role { font-size: 7px; font-weight: 600; color: #7A5A28; line-height: 1.2; text-align: center; }
+    .chip-cost {
+      position: absolute; left: -6px; top: -6px;
+      min-width: 18px; height: 18px; padding: 0 3px;
+      display: flex; align-items: center; justify-content: center;
+      font-family: var(--font-num); font-size: 10px; line-height: 1;
+      color: #FFF6D8; text-shadow: 0 2px 0 #6B0F7A;
+      background: linear-gradient(180deg, var(--elixir-hi), var(--elixir) 55%, #6B0F7A);
+      border: 2px solid var(--vr-font-outline); border-radius: 9px;
+      box-shadow: 0 2px 0 rgba(0, 0, 0, 0.4);
+      pointer-events: none;
+    }
+    /* A card the player cannot afford right now should look unplayable without
+       being disabled - disabled would also block the click that tells them
+       why, and the elixir bar is regenerating a second later anyway. */
+    .chip.broke { opacity: 0.55; }
+    .chip.broke .chip-cost { background: linear-gradient(180deg, #C9B79A, #8a7857 60%, #5C554D); color: #3A2A12; text-shadow: none; }
+    .chip-lock { font-size: 7px; font-weight: 800; letter-spacing: 1px; color: var(--vr-danger-red); }
+    .chip:disabled { cursor: not-allowed; opacity: 0.5; }
+    .chip:disabled .chip-face { filter: grayscale(1); }
+
+    /* -- damage numbers --------------------------------------------------
+       Bold, inked, and popping. Four stacked text-shadows give the outline on
+       every side; animating scale on a keyframe is the pop. */
+    #fx { position: absolute; inset: 0; z-index: 20; pointer-events: none; overflow: hidden; }
+    .dmg {
+      position: absolute; font-family: var(--font-num); font-size: 30px; line-height: 1;
+      color: #FFE45C; white-space: nowrap; will-change: transform, opacity;
+      text-shadow:
+        -3px -3px 0 var(--vr-font-outline), 3px -3px 0 var(--vr-font-outline),
+        -3px  3px 0 var(--vr-font-outline), 3px  3px 0 var(--vr-font-outline),
+        0 4px 0 rgba(0, 0, 0, 0.5);
+      animation: dmgPop 900ms cubic-bezier(0.18, 0.9, 0.3, 1) forwards;
+    }
+    .dmg.ko { color: #fff; font-size: 38px; }
+    @keyframes dmgPop {
+      0%   { transform: translate(-50%, 0) scale(0.3); opacity: 0; }
+      22%  { transform: translate(-50%, -10px) scale(1.45); opacity: 1; }
+      40%  { transform: translate(-50%, -16px) scale(1); opacity: 1; }
+      100% { transform: translate(-50%, -62px) scale(0.85); opacity: 0; }
+    }
+
+    /* -- result screen --------------------------------------------------- */
+    #result {
+      position: absolute; inset: 0; z-index: 40; display: none;
+      align-items: center; justify-content: center; flex-direction: column;
+      background: rgba(40, 22, 8, 0.55); backdrop-filter: blur(2px);
+    }
+    #result.on { display: flex; }
+    .ribbon {
+      font-family: var(--font-num); font-size: 54px; line-height: 1; color: #FFF3CE;
+      background: linear-gradient(180deg, var(--gold-hi), var(--vr-gold-border) 48%, var(--vr-gold-shadow));
+      border: 5px solid var(--vr-font-outline); border-radius: 18px;
+      padding: 22px 62px; box-shadow: var(--lift);
+      text-shadow: 0 4px 0 rgba(0, 0, 0, 0.45);
+      animation: ribbonIn 520ms cubic-bezier(0.2, 1.5, 0.4, 1) both;
+    }
+    #result.lose .ribbon { background: linear-gradient(180deg, #C9C2B8, #8E857A 48%, #5C554D); }
+    .ribbon-sub {
+      margin-top: 14px; font-size: 15px; font-weight: 700; color: var(--parchment); letter-spacing: 3px;
+      -webkit-text-stroke: 3px var(--vr-font-outline); paint-order: stroke fill;
+    }
+    @keyframes ribbonIn {
+      0% { transform: scale(0.2) rotate(-8deg); opacity: 0; }
+      100% { transform: scale(1) rotate(0deg); opacity: 1; }
+    }
+    .confetti { position: absolute; top: -20px; width: 11px; height: 16px; opacity: 0; animation: fall linear forwards; }
+    @keyframes fall {
+      0% { transform: translateY(-30px) rotate(0deg); opacity: 1; }
+      100% { transform: translateY(105vh) rotate(760deg); opacity: 0; }
+    }
+
+    /* -- context loss ---------------------------------------------------- */
+    #contextLost {
+      position: absolute; inset: 0; z-index: 50; display: none;
+      align-items: center; justify-content: center; flex-direction: column;
+      background: rgba(40, 22, 8, 0.92); text-align: center; padding: 24px;
+    }
+    #contextLost .ctx-title {
+      font-family: var(--font-num); font-size: 22px; color: var(--vr-gold-border);
+      -webkit-text-stroke: 3px var(--vr-font-outline); paint-order: stroke fill;
+    }
+    #contextLost .ctx-body { margin-top: 10px; font-size: 13px; font-weight: 600; color: var(--parchment); line-height: 1.7; }
+
+    /* Short windows: the card faces give up size first, since the arena is the
+       thing worth protecting. */
+    @media (max-height: 640px) {
+      .chip-role { display: none; }
+      .chip { width: 58px; }
+      .chip-face, .chip-face canvas { width: 42px; height: 42px; }
+      .elixir-track { width: 150px; }
+      .ribbon { font-size: 38px; padding: 16px 40px; }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="webgl"></canvas>
+
+  <div id="hud">
+    <div class="bar-top">
+      <div class="brand">
+        <div class="brand-mark"></div>
+        <div class="brand-text">VIBEROYALE<span>THE ARENA</span></div>
+      </div>
+      <div class="tag">PHASE <b>02</b> &middot; CARD PLAY</div>
+    </div>
+
+    <div class="mid">
+      <section class="panel">
+        <div class="panel-inner">
+          <div class="panel-head"><span>YOUR SIDE</span><b id="playerTotal">100%</b></div>
+          <div id="playerRows"></div>
+        </div>
+      </section>
+
+      <section class="panel rival">
+        <div class="panel-inner">
+          <div class="panel-head"><span>RIVAL</span><b id="enemyTotal">100%</b></div>
+          <div id="enemyRows"></div>
+        </div>
+      </section>
+    </div>
+
+    <div class="bar-bottom">
+      <div class="tag">GRASS FIELD &middot; 3 LANES</div>
+      <div class="roster-wrap">
+        <div id="rosterHint">PICK A CARD &middot; TAP THE FIELD</div>
+        <div id="elixirBar" class="elixir">
+          <div class="elixir-track"><i id="elixirFill"></i></div>
+          <div class="elixir-num" id="elixirNum">5</div>
+        </div>
+        <div id="roster"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="fx"></div>
+
+  <div id="result">
+    <div class="ribbon" id="resultTitle">VICTORY</div>
+    <div class="ribbon-sub" id="resultSub">RIVAL KING TOWER DOWN</div>
+  </div>
+
+  <div id="contextLost">
+    <div class="ctx-title">RECONNECTING GPU</div>
+    <div class="ctx-body">Graphics context lost. Execution resumes automatically.</div>
+  </div>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>
