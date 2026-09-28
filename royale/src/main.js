@@ -357,6 +357,18 @@ function startMatch(difficulty, deck) {
 
 const lobby = createLobby({ audio, onStart: startMatch });
 
+// -- probe bypass -----------------------------------------------------------
+// The pre-match lobby exists for a human who needs a beat to choose a deck.
+// The probe harnesses that drive this page (shot.mjs, ui-audit.mjs) were built
+// for a game that was clickable from the first frame, and they still assume
+// that. ?probe=1 replays that assumption: it skips the lobby and starts a
+// normal match immediately with the full roster, so an audit can keep driving
+// the page without learning what a lobby is. Human-loaded pages never see it.
+if (new URLSearchParams(location.search).get('probe') === '1') {
+  lobby.hide();
+  startMatch('normal', CHARACTERS.filter((c) => c.unlocked !== false).map((c) => c.id));
+}
+
 // -- test surface ------------------------------------------------------------
 // Test-only: nothing in the game imports this. It exists so the screenshot and
 // probe harnesses can put the board into a known state - damaged towers, a
