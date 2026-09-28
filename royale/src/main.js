@@ -8,6 +8,9 @@ import { buildTowers, damageTower, setHitListener } from './towers.js';
 import { buildTroops, passable } from './troops.js';
 import { CHARACTERS } from './characters.js';
 import { createUI } from './ui.js';
+import { createAudio } from './audio.js';
+import { createBot } from './bot.js';
+import { createLobby } from './lobby.js';
 import { ARENA, TOWERS, PALETTE, CARDS } from './config.js';
 import { neonBox } from './voxel.js';
 import * as THREE from 'three';
@@ -19,20 +22,76 @@ const MAX_DT = 0.05;
 const arena = buildArena();
 const towerKit = buildTowers();
 scene.add(arena.root, towerKit.root);
+
+// -- audio ------------------------------------------------------------------
+// Nothing is audible until the first real gesture, because a browser will not
+// start an AudioContext without one. Every call into this handle is safe
+// before that point, so the game below can wire sound in unconditionally and
+// never branch on whether audio happened to be allowed.
+const audio = createAudio();
+
+// One gesture unlocks the whole session. keydown is here as well as pointerdown
+// because a player who starts by hitting a number key deserves the same sound
+// as one who taps a card.
+const unlockAudio = () => audio.unlock();
+window.addEventListener('pointerdown', unlockAudio, { passive: true });
+window.addEventListener('keydown', unlockAudio, { passive: true });
+
+// -- match state ------------------------------------------------------------
+// The whole simulation is frozen until the lobby says go. Not gated per
+// handler: one flag, read in the loop, so there is no path where the field is
+// live but the bot is not, or the bot is spending elixir behind a lobby the
+// player cannot click through.
+let matchLive = false;
+
 // Mounted after the towers exist: the HUD binds to towerKit.towers, so it has
-// to be created once there is real HP to read.
-const ui = createUI({ towerKit, camera });
-// Every tower hit raises a damage number at the tower that took it.
-setHitListener((tower, amount, ko) => ui.popDamage(tower, amount, ko));
+// to be created once there is real HP to read. The two callbacks are how the
+// HUD reports a card being armed and a match being decided without owning an
+// audio handle or knowing what a bot is.
+const ui = createUI({
+  towerKit,
+  camera,
+  onCardPick: () => audio.play('card'),
+  onResult: (won) => {
+    matchLive = false;
+    bot.stop();
+    audio.setMusic(false);
+    audio.play(won ? 'victory' : 'defeat');
+  },
+});
+
+// Every tower hit raises a damage number at the tower that took it, and says
+// so out loud. A king hit gets its own heavier cue - it is the sound of the
+// one tower whose loss ends the match.
+setHitListener((tower, amount, ko) => {
+  ui.popDamage(tower, amount, ko);
+  if (ko) audio.play('ko');
+  else audio.play(tower.kind === 'king' ? 'king' : 'towerHit');
+});
 
 // Troops come after the UI, because a troop landing a hit needs popDamageAt()
 // to throw a number at whatever it hit - and troop-on-troop damage has no
 // tower for the tower listener to hang off.
 const troops = buildTroops({
   towers: towerKit.towers,
-  onHit: (troop, amount) => ui.popDamageAt(troop.x, 2.8, troop.z, amount, false),
+  onHit: (troop, amount) => {
+    ui.popDamageAt(troop.x, 2.8, troop.z, amount, false);
+    audio.play('hit');
+  },
 });
 scene.add(troops.root);
+
+// -- the rival --------------------------------------------------------------
+// Built now, armed later. The bot shares troops.js and the same 28-slot
+// capacity the player is spending, so it is on exactly the same rules.
+const bot = createBot({
+  troops,
+  towers: towerKit.towers,
+  difficulty: 'normal',
+  // The rival's plays are audible so the player can read a counter from sound
+  // alone when the far bank is off screen.
+  onDeploy: () => audio.play('enemyPlace'),
+});
 
 // -- placement --------------------------------------------------------------
 // A card is played in two moves: click the card, then click the field. This
@@ -121,6 +180,12 @@ scene.add(ghost);
 let hover = null;
 
 function refreshGhost() {
+  // The lobby hides the hand, so a ghost ring would be something the player
+  // cannot act on - visible while useless is a control that lies.
+  if (!matchLive) {
+    ghost.visible = false;
+    return;
+  }
   if (!ui.selected || !hover) {
     ghost.visible = false;
     return;
@@ -149,21 +214,41 @@ renderer.domElement.addEventListener('pointerleave', () => {
  * @param {number} clientY
  */
 function deploy(clientX, clientY) {
+  // Not reachable while the lobby is up (the overlay eats the click), but the
+  // key path and any probe that drives deploy() directly must not be able to
+  // spend elixir on a match that has not started.
+  if (!matchLive) return;
   const id = ui.selected;
-  if (!id) { ui.flashHint('PICK A CARD FIRST'); return; }
+  if (!id) {
+    ui.flashHint('PICK A CARD FIRST');
+    audio.play('deny');
+    return;
+  }
 
   const p = groundAt(clientX, clientY);
-  if (!legal(p)) { ui.flashHint('CANNOT DEPLOY THERE'); return; }
+  if (!legal(p)) {
+    ui.flashHint('CANNOT DEPLOY THERE');
+    audio.play('deny');
+    return;
+  }
 
   // Capacity is checked BEFORE the spend, so elixir is only ever taken for a
   // placement that is definitely going to happen.
   let live = 0;
   for (const t of troops.troops) if (!t.dead) live++;
-  if (live >= troops.MAX_TROOPS) { ui.flashHint('FIELD IS FULL'); return; }
+  if (live >= troops.MAX_TROOPS) {
+    ui.flashHint('FIELD IS FULL');
+    audio.play('deny');
+    return;
+  }
 
   // spend() is the same gate the old keydown demo used, and it is still the
   // only thing in the game that can lower the bar.
-  if (!ui.spend(ui.costOf(id))) { ui.flashHint('NOT ENOUGH ELIXIR'); return; }
+  if (!ui.spend(ui.costOf(id))) {
+    ui.flashHint('NOT ENOUGH ELIXIR');
+    audio.play('deny');
+    return;
+  }
 
   const card = CHARACTERS.find((c) => c.id === id);
   const t = troops.spawn(card, p.x, p.z, 'player');
@@ -173,8 +258,13 @@ function deploy(clientX, clientY) {
     // be precisely the kind of lie this HUD does not tell.
     console.error('deploy: spawn refused after a successful spend', id, p);
     ui.flashHint('DEPLOY FAILED');
+    audio.play('deny');
     return;
   }
+  // The two sounds of a card actually arriving: the drop and the body popping
+  // in. Spawn is separate so the same cue is reusable by the bot.
+  audio.play('place');
+  audio.play('spawn');
   // The card is spent, so it is no longer armed.
   ui.select(null);
   ghost.visible = false;
@@ -191,6 +281,9 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
 // disagree about what is armed.
 window.addEventListener('keydown', (e) => {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
+  // Number keys are a convenience for choosing a card once the match is live.
+  // Before that they would race the lobby, which has its own keys to press.
+  if (!matchLive) return;
 
   if (e.key === 'Escape') {
     if (ui.selected) { ui.select(null); ghost.visible = false; }
@@ -199,7 +292,10 @@ window.addEventListener('keydown', (e) => {
 
   const n = parseInt(e.key, 10);
   if (!(n >= 1 && n <= 9)) return;
-  const list = CHARACTERS.filter((c) => c.unlocked !== false);
+  // Keys address the hand the player is actually holding, not the full nine:
+  // a shortcut that arms a card you do not have is a shortcut that lies.
+  const deckIds = ui.deck || CHARACTERS.filter((c) => c.unlocked !== false).map((c) => c.id);
+  const list = deckIds.map((id) => CHARACTERS.find((c) => c.id === id)).filter(Boolean);
   const card = list[n - 1];
   if (!card) return;
   ui.select(card.id);
@@ -231,8 +327,14 @@ function animate() {
   const dt = Math.min(clock.getDelta(), MAX_DT);
   arena.update(dt);
   towerKit.update(dt);
-  troops.update(dt);
-  ui.update(dt);
+  // The board breathes from the first frame (crowd, foam, torn banners), but
+  // nothing that costs elixir or spends a troop tick until the lobby hands
+  // the match over. This is the single gate; there is no second one to forget.
+  if (matchLive) {
+    bot.update(dt);
+    troops.update(dt);
+    ui.update(dt);
+  }
   renderer.render(scene, camera);
 }
 
@@ -241,6 +343,19 @@ window.addEventListener('resize', () => {
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
+
+// -- lobby ------------------------------------------------------------------
+// The pre-match screen resolves the two things a match needs up front: the
+// four cards the player is fighting with, and how hard the rival pushes back.
+// onStart runs after the countdown and is the only place matchLive turns true.
+function startMatch(difficulty, deck) {
+  ui.setDeck(deck);
+  bot.setDifficulty(difficulty);
+  bot.start();
+  matchLive = true;
+}
+
+const lobby = createLobby({ audio, onStart: startMatch });
 
 // -- test surface ------------------------------------------------------------
 // Test-only: nothing in the game imports this. It exists so the screenshot and
@@ -263,6 +378,12 @@ try {
     __deploy: deploy,
     __groundAt: groundAt,
     __legal: legal,
+    // The phase-2 additions: sound, the rival, the lobby and the live gate, so
+    // a probe can assert the match is frozen pre-start and armed after it.
+    __audio: audio,
+    __bot: bot,
+    __lobby: lobby,
+    get __matchLive() { return matchLive; },
   };
 } catch (e) {
   window.__vrScopeError = String(e);
@@ -299,6 +420,12 @@ if (new URLSearchParams(location.search).get('state') === 'damaged') {
     glitch: Number(t.glitch.toFixed(2)),
     wrecked: !!t.wrecked,
   }))));
+  // The probe needs to photograph the damage, which only paints once the match
+  // is live and the loop is running HUD updates. The lobby would be in the way
+  // of that frame, so a probe load starts the match immediately with the full
+  // roster. No game code reads this flag - it is the screenshot harness.
+  lobby.hide();
+  startMatch('normal', CHARACTERS.filter((c) => c.unlocked !== false).map((c) => c.id));
 }
 
 animate();

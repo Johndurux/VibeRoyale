@@ -14,8 +14,10 @@ import { hpColour } from './towers.js';
 import { RARITY, CARDS } from './config.js';
 
 // Portrait resolution. Over-sampled against the ~46px the face is displayed at
-// so the voxel steps stay crisp instead of aliasing into mush.
-const FACE_PX = 96;
+// so the voxel steps stay crisp instead of aliasing into mush. Exported
+// because lobby.js paints the same portraits for its deck picker - one
+// portrait pipeline, not two that can drift apart.
+export const FACE_PX = 96;
 
 // buildTowers() pushes king, then small[0] (x = -6.2), then small[1] (x = +6.2),
 // so filtering by side preserves that order and these labels stay true.
@@ -51,7 +53,7 @@ const ELIXIR_EPS = 1e-6;
  *
  * @param {Array<{char: object, ctx: CanvasRenderingContext2D}>} targets
  */
-function renderFaces(targets) {
+export function renderFaces(targets) {
   if (!targets.length) return;
 
   const cv = document.createElement('canvas');
@@ -103,11 +105,37 @@ function renderFaces(targets) {
 }
 
 // ── roster ────────────────────────────────────────────────────────────────
-function buildRoster(host, hint) {
+/**
+ * Build the clickable card hand.
+ * @param {HTMLElement} host
+ * @param {HTMLElement} hint
+ * @param {(id: string) => void} [onCardPick] called with the id of a card the
+ *   player armed. This exists so a click can make a sound without the HUD
+ *   owning an audio handle - the module never imports audio.js, it just
+ *   reports what happened and main.js decides what that sounds like.
+ * @param {string[]|null} [deck] ids to show, or null for the whole roster. The
+ *   lobby hands over the hand the player actually chose, so the deck previewed
+ *   on that screen and the cards in the pit are the same four. A preview that
+ *   disagrees with the hand would be the exact kind of lie this HUD does not
+ *   tell.
+ */
+function buildRoster(host, hint, onCardPick, deck) {
   const faces = [];
   const chips = new Map();
 
-  CHARACTERS.forEach((c) => {
+  // A deck of ids resolves to real characters; an id that matches nothing is
+  // dropped rather than rendered as a blank card, and a deck that resolves to
+  // nothing falls back to the full roster so the hand is never empty.
+  let list = null;
+  if (deck && deck.length) {
+    list = deck
+      .map((id) => CHARACTERS.find((c) => c.id === id))
+      .filter(Boolean);
+    if (!list.length) list = null;
+  }
+  const shown = list || CHARACTERS;
+
+  shown.forEach((c) => {
     const unlocked = c.unlocked !== false;
     // Falls back to common so a character added without a rarity still renders
     // a valid card rather than falling through to a transparent border.
@@ -188,10 +216,16 @@ function buildRoster(host, hint) {
     if (hint) hint.textContent = baseText(id);
   }
 
-  for (const [id, el] of chips) el.addEventListener('click', () => select(id));
+  for (const [id, el] of chips) {
+    el.addEventListener('click', () => {
+      select(id);
+      if (onCardPick) onCardPick(id);
+    });
+  }
 
-  // Default to the first unlocked fighter so the panel is never in a dead state.
-  const first = CHARACTERS.find((c) => c.unlocked !== false);
+  // Default to the first fighter actually on show - the deck, not the whole
+  // roster - so the armed card is always one the player brought.
+  const first = shown.find((c) => c.unlocked !== false);
   if (first) select(first.id);
 
   return {
@@ -236,13 +270,27 @@ const POP_HEIGHT = { king: 8.6, small: 6.4 };
 
 /**
  * Mount the HUD and return a per-frame updater.
- * @param {{towerKit: {towers: Array<object>}, camera: THREE.Camera}} deps
+ * @param {object} deps
+ * @param {{towers: Array<object>}} deps.towerKit live towers to read HP from
+ * @param {THREE.Camera} deps.camera used to project damage numbers
+ * @param {(id: string) => void} [deps.onCardPick] the player armed a card
+ * @param {(won: boolean) => void} [deps.onResult] a king has fallen and the
+ *   outcome is decided. main.js uses it to stop the bot and to choose the
+ *   victory or defeat cue, so the HUD never needs to know what audio is.
  */
-export function createUI({ towerKit, camera }) {
-  const roster = buildRoster(
-    document.getElementById('roster'),
-    document.getElementById('rosterHint')
-  );
+export function createUI({ towerKit, camera, onCardPick, onResult }) {
+  // Kept as variables, not arguments, because the lobby hands the deck over
+  // after this returns: the lobby owns the pre-match screen and resolves the
+  // hand when the player presses start, which is after boot. setDeck() then
+  // rebuilds the hand in place rather than the HUD guessing at it up front.
+  const rosterHost = document.getElementById('roster');
+  const hintHost = document.getElementById('rosterHint');
+  let roster = buildRoster(rosterHost, hintHost, onCardPick, null);
+  // Tracks the resolved hand. null means "the whole roster", which is what a
+  // match plays before the lobby has decided; setDeck() replaces it. Read by
+  // main.js so the number-key shortcut cannot pick a card the hand does not
+  // actually hold.
+  let deck = null;
 
   const player = buildSide(
     document.getElementById('playerRows'),
@@ -307,10 +355,16 @@ export function createUI({ towerKit, camera }) {
     popDamageAt(tower.x, tower.mesh.position.y + h, tower.z, amount, ko);
   }
 
-  /** Fill the result overlay with gold confetti and show it. */
+  /**
+   * Fill the result overlay with gold confetti and show it.
+   * @param {boolean} won
+   */
   function showResult(won) {
     if (!result || settled) return;
     settled = true;
+    // Reported before the overlay is built, so main.js can stop the bot and
+    // pick a cue without waiting on any DOM work.
+    if (onResult) onResult(won);
     result.classList.toggle('lose', !won);
     resultTitle.textContent = won ? 'VICTORY' : 'DEFEAT';
     resultSub.textContent = won ? 'RIVAL KING TOWER DOWN' : 'YOUR KING TOWER FELL';
@@ -400,6 +454,24 @@ export function createUI({ towerKit, camera }) {
   update();
 
   /**
+   * Swap the hand for the deck the player chose in the lobby.
+   *
+   * Rebuilt rather than filtered, because the chips own their canvases and a
+   * filtered-out card would leave a stale portrait behind. The armed card is
+   * re-seeded from the new hand, and the affordability pass runs once so the
+   * rebuild does not leave every card dimmed until the next frame.
+   *
+   * @param {string[]} ids
+   */
+  function setDeck(ids) {
+    if (!rosterHost) return;
+    deck = ids && ids.length ? ids.slice() : null;
+    rosterHost.innerHTML = '';
+    roster = buildRoster(rosterHost, hintHost, onCardPick, deck);
+    roster.markAffordable(elixir);
+  }
+
+  /**
    * Spend elixir. The single gate through which the bar can go down, so no
    * caller can decrement the number behind the HUD's back and leave the fill
    * disagreeing with the readout.
@@ -434,15 +506,21 @@ export function createUI({ towerKit, camera }) {
 
   return {
     update,
+    setDeck,
     popDamage,
     popDamageAt,
     showResult,
     spend,
-    select: roster.select,
+    // Delegated to the live roster rather than bound at build time, because
+    // setDeck() swaps `roster` for a new hand. A reference captured here would
+    // keep writing to the first hand's detached chips, and deploy() would arm
+    // a card on cardboard nobody can see.
+    select: (id) => roster.select(id),
     costOf: (id) => (CARDS[id] || {}).cost,
-    markAffordable: roster.markAffordable,
-    flashHint: roster.flashHint,
+    markAffordable: (current) => roster.markAffordable(current),
+    flashHint: (msg) => roster.flashHint(msg),
     get elixir() { return elixir; },
     get selected() { return roster.selected; },
+    get deck() { return deck; },
   };
 }

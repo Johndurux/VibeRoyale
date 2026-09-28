@@ -300,6 +300,173 @@
       100% { transform: translateY(105vh) rotate(760deg); opacity: 0; }
     }
 
+    /* -- lobby -----------------------------------------------------------
+       The pre-match screen. Same material as the HUD - gold rims, hard
+       outlines, Baloo labels and Bungee numbers - because a lobby in a
+       different visual language than the game it is starting reads as a
+       menu from some other program. It sits over the live arena, so the
+       pitch is already compositing behind it and the only transition into
+       the match is the overlay fading out. */
+    #lobby {
+      position: absolute; inset: 0; z-index: 30;
+      display: none; align-items: center; justify-content: center;
+      padding: 16px;
+      background: rgba(40, 22, 8, 0.62);
+      backdrop-filter: blur(3px);
+      overflow-y: auto;
+    }
+    #lobby.on { display: flex; }
+
+    .lv-panel {
+      width: 720px; max-width: 100%;
+      display: flex; flex-direction: column; align-items: center; gap: 8px;
+      padding: 14px 20px 18px;
+      background: linear-gradient(180deg, var(--gold-hi), var(--vr-gold-border) 40%, var(--vr-gold-shadow));
+      border: 4px solid var(--vr-font-outline); border-radius: 20px;
+      box-shadow: var(--lift);
+    }
+    .lv-head { width: 100%; display: flex; align-items: flex-start; justify-content: space-between; }
+
+    .lv-title {
+      font-size: 12px; font-weight: 800; letter-spacing: 3px; color: #6B4A12;
+      margin-top: 4px;
+    }
+    .lv-sub {
+      font-size: 11px; font-weight: 600; color: #7A5A28;
+      margin: -4px 0 2px; text-align: center;
+    }
+
+    /* The picker row. Scrolls rather than wraps, so a nine-character cast
+       never pushes the start button off the panel on a short window. */
+    .lv-pick {
+      display: flex; gap: 6px; flex-wrap: wrap; justify-content: center;
+      max-width: 100%;
+    }
+    .lv-deck { display: flex; gap: 8px; justify-content: center; min-height: 10px; }
+
+    /* A lobby card is the HUD chip at a size you can actually read a stat off,
+       and it uses the same two-layer background trick: a parchment face with
+       the rarity rim clipped to the border box. */
+    .lcard {
+      --rim: var(--vr-rarity-common);
+      position: relative;
+      width: 74px; padding: 4px 4px 6px;
+      background:
+        linear-gradient(180deg, #FFF6E2, #EBD3A4) padding-box,
+        var(--rim) border-box;
+      border: 3px solid transparent; border-radius: 12px;
+      color: #3A2A12; font-family: var(--font); cursor: pointer;
+      display: flex; flex-direction: column; align-items: center; gap: 2px;
+      box-shadow: 0 4px 0 rgba(0, 0, 0, 0.42);
+      transition: transform 110ms steps(2), box-shadow 110ms steps(2);
+    }
+    .lcard.small { width: 66px; }
+    .lcard:hover { transform: translateY(-4px); box-shadow: 0 8px 0 rgba(0, 0, 0, 0.42); }
+    .lcard:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+    .lcard-face {
+      display: block; width: 52px; height: 52px;
+      border: 2px solid var(--vr-font-outline); border-radius: 8px; overflow: hidden;
+    }
+    .lcard.small .lcard-face, .lcard-face canvas { width: 44px; height: 44px; }
+    .lcard-face canvas { display: block; }
+    .lcard-name { font-size: 9px; font-weight: 800; line-height: 1.1; }
+    .lcard-role { font-size: 7px; font-weight: 600; color: #7A5A28; line-height: 1.2; }
+    /* A card in the hand is lifted and glowing; one still in the roster is
+       not dimmed, so the two states are told apart by the lift rather than
+       by a value judgement about what is selected. */
+    .lcard.on {
+      transform: translateY(-6px);
+      box-shadow: 0 10px 0 var(--vr-gold-shadow), 0 0 18px rgba(255, 201, 74, 0.75);
+    }
+    .lcard.fixed { cursor: pointer; }
+    .lcard-cost {
+      position: absolute; left: -6px; top: -6px;
+      min-width: 18px; height: 18px; padding: 0 3px;
+      display: flex; align-items: center; justify-content: center;
+      font-family: var(--font-num); font-size: 10px; line-height: 1;
+      color: #FFF6D8; text-shadow: 0 2px 0 #6B0F7A;
+      background: linear-gradient(180deg, var(--elixir-hi), var(--elixir) 55%, #6B0F7A);
+      border: 2px solid var(--vr-font-outline); border-radius: 9px;
+      box-shadow: 0 2px 0 rgba(0, 0, 0, 0.4);
+      pointer-events: none;
+    }
+
+    /* Difficulty: three wide keys, the selected one stamped down. The rival's
+       blurb is the honest description of what that level actually does, not
+       a difficulty curve word. */
+    .lv-diff { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+    .ldiff {
+      min-width: 148px;
+      display: flex; flex-direction: column; align-items: center; gap: 1px;
+      padding: 6px 12px 7px;
+      background: linear-gradient(180deg, #FFF6E2, #E3CDA0);
+      border: 3px solid var(--vr-font-outline); border-radius: 12px;
+      font-family: var(--font); color: #3A2A12; cursor: pointer;
+      box-shadow: 0 4px 0 rgba(0, 0, 0, 0.38);
+      transition: transform 110ms steps(2), box-shadow 110ms steps(2);
+    }
+    .ldiff:hover { transform: translateY(-3px); }
+    .ldiff-name { font-size: 12px; font-weight: 800; letter-spacing: 1.5px; }
+    .ldiff-blurb { font-size: 8.5px; font-weight: 600; color: #7A5A28; }
+    .ldiff.on {
+      background: linear-gradient(180deg, var(--gold-hi), var(--vr-gold-border));
+      transform: translateY(-4px);
+      box-shadow: 0 9px 0 var(--vr-gold-shadow), 0 0 18px rgba(255, 201, 74, 0.6);
+    }
+
+    .lv-sound {
+      font-family: var(--font); font-size: 9px; font-weight: 800; letter-spacing: 1.5px;
+      color: #6B4A12; cursor: pointer;
+      background: linear-gradient(180deg, #FFF6E2, #E3CDA0);
+      border: 2px solid var(--vr-font-outline); border-radius: 9px;
+      padding: 4px 9px; box-shadow: 0 3px 0 rgba(0, 0, 0, 0.34);
+    }
+    .lv-sound.off {
+      background: linear-gradient(180deg, #C9C2B8, #8E857A);
+      color: #FFF6E2;
+    }
+    .lv-sound:disabled { cursor: not-allowed; opacity: 0.6; }
+
+    .lv-start {
+      font-family: var(--font-num); font-size: 26px; line-height: 1;
+      color: #FFF3CE; margin-top: 6px;
+      background: linear-gradient(180deg, var(--hp-green), #3F8F22 52%, #2A6A14);
+      border: 4px solid var(--vr-font-outline); border-radius: 16px;
+      padding: 12px 58px; cursor: pointer;
+      text-shadow: 0 3px 0 rgba(0, 0, 0, 0.45);
+      box-shadow: 0 8px 0 #23530F, 0 12px 22px rgba(0, 0, 0, 0.4);
+      transition: transform 110ms steps(2), box-shadow 110ms steps(2);
+    }
+    .lv-start:hover { transform: translateY(-3px); box-shadow: 0 11px 0 #23530F, 0 14px 24px rgba(0, 0, 0, 0.42); }
+    .lv-start:disabled { cursor: not-allowed; filter: grayscale(0.6) brightness(0.85); transform: none; }
+    .lv-hint { font-size: 9px; font-weight: 700; letter-spacing: 3px; color: #7A5A28; }
+
+    /* Countdown. Full-bleed over the panel, so the numbers are the only thing
+       on screen while they run. */
+    .lv-count {
+      position: absolute; inset: 0;
+      display: none; align-items: center; justify-content: center;
+      pointer-events: none;
+    }
+    .lv-count.on { display: flex; }
+    .lv-count b {
+      font-family: var(--font-num); font-size: 120px; line-height: 1;
+      color: #FFF3CE;
+      -webkit-text-stroke: 8px var(--vr-font-outline); paint-order: stroke fill;
+      text-shadow: 0 8px 0 rgba(0, 0, 0, 0.4);
+      animation: lvPop 620ms cubic-bezier(0.2, 1.5, 0.4, 1) both;
+    }
+    @keyframes lvPop {
+      0% { transform: scale(0.35); opacity: 0; }
+      40% { transform: scale(1.18); opacity: 1; }
+      100% { transform: scale(1); opacity: 1; }
+    }
+
+    /* The hand is hidden while the lobby is up: the player cannot reach the
+       field through the overlay anyway, and showing a live hand they cannot
+       use is a control that lies about being a control. */
+    body.lobbying .bar-bottom { visibility: hidden; }
+
     /* -- context loss ---------------------------------------------------- */
     #contextLost {
       position: absolute; inset: 0; z-index: 50; display: none;
@@ -320,6 +487,14 @@
       .chip-face, .chip-face canvas { width: 42px; height: 42px; }
       .elixir-track { width: 150px; }
       .ribbon { font-size: 38px; padding: 16px 40px; }
+      .lv-sub { display: none; }
+      .ldiff-blurb { display: none; }
+      .ldiff { min-width: 104px; padding: 5px 10px 6px; }
+      .lcard { width: 62px; }
+      .lcard-face, .lcard-face canvas { width: 40px; height: 40px; }
+      .lv-panel { gap: 5px; padding: 10px 14px 12px; }
+      .lv-start { font-size: 21px; padding: 9px 42px; }
+      .lv-count b { font-size: 86px; }
     }
   </style>
 </head>
@@ -365,6 +540,38 @@
   </div>
 
   <div id="fx"></div>
+
+  <!-- The lobby. It sits over the live arena rather than replacing it, so the
+       pitch is already there behind the panel and the transition into the
+       match is a fade, not a page change. Display is driven by the .on class
+       so the arena is composited and animating behind it the whole time. -->
+  <div id="lobby" class="on">
+    <div class="lv-panel">
+      <div class="lv-head">
+        <div class="brand">
+          <div class="brand-mark"></div>
+          <div class="brand-text">VIBEROYALE<span>THE ARENA</span></div>
+        </div>
+        <button type="button" id="lobbySound" class="lv-sound">SOUND ON</button>
+      </div>
+
+      <div class="lv-title">PICK YOUR FOUR</div>
+      <div class="lv-sub">Tap cards to swap them in. Your deck is the only hand you fight with.</div>
+      <div id="lobbyPick" class="lv-pick"></div>
+
+      <div class="lv-title">RIVAL</div>
+      <div id="lobbyDiff" class="lv-diff"></div>
+
+      <div class="lv-title">YOUR DECK</div>
+      <div id="lobbyDeck" class="lv-deck"></div>
+
+      <button type="button" id="lobbyStart" class="lv-start">BATTLE</button>
+      <div class="lv-hint">3 &middot; 2 &middot; 1 &middot; GO</div>
+    </div>
+    <!-- The countdown lives outside .lv-panel so it can cover the whole
+         screen, buttons and all, while the buttons are disabled underneath. -->
+    <div id="lobbyCount" class="lv-count"><b id="lobbyCountNum">3</b></div>
+  </div>
 
   <div id="result">
     <div class="ribbon" id="resultTitle">VICTORY</div>
