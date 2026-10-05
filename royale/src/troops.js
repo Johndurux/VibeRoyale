@@ -41,6 +41,24 @@ const BAR_Y = 3.15;
 const BAR_W = 1.5;
 const BAR_H = 0.24;
 
+// ── weapon archetypes ─────────────────────────────────────────────────────
+// Cards declare `weapon` ('sword' | 'spear' | 'spearshield' | 'bow') and both
+// the strike animation and the hit effect follow that declaration, rather than
+// a per-character id list drifting out of sync with the models.
+const WINDUP = {
+  sword: 0.14,
+  spear: 0.1,
+  spearshield: 0.14,
+  bow: 0.2, // drawing a string reads slower than cocking an arm
+};
+
+function weaponOf(t) {
+  if (t.card && t.card.weapon) return t.card.weapon;
+  // Defence in depth for a card that predates the field: a long-range unit
+  // without a declared weapon shoots, everything else swings.
+  return t.stats && t.stats.range > 2 ? 'bow' : 'sword';
+}
+
 // Re-aim interval. Recomputing the target every frame makes a troop oscillate
 // between two equidistant enemies; a third of a second is often enough to feel
 // instant and slow enough to stay committed.
@@ -171,6 +189,10 @@ function makeTroop(card, stats, x, z, side) {
     deathT: 0,
     attackState: 'idle', // 'idle' | 'windup' | 'recovery'
     windupT: 0,
+    windupMax: WINDUP.sword,
+    poseFrom: null,  // limb pose captured when a windup starts, so the
+                     // anticipation blends from wherever the body actually is
+    breath: 0,       // idle bob phase
     attackTarget: null,
   };
 }
@@ -391,10 +413,9 @@ export function buildTroops({ towers, vfx = null, audio = null, onHit = null, on
   function executeHit(t) {
     const tgt = t.attackTarget || t.target;
     if (!tgt) return;
-    const charId = t.card ? t.card.id : '';
-    const isRanged = charId === 'honey' || charId === 'goggles' || charId === 'lavender' || (t.stats && t.stats.range > 2.0 && charId !== 'armor');
+    const weapon = weaponOf(t);
 
-    if (isRanged) {
+    if (weapon === 'bow') {
       if (audio) audio.play('arrow');
       if (vfx && vfx.arrowProjectile) {
         vfx.arrowProjectile(t.x, 1.4, t.z, tgt, 16, () => {
@@ -405,10 +426,10 @@ export function buildTroops({ towers, vfx = null, audio = null, onHit = null, on
       }
     } else {
       if (audio) {
-        audio.play(charId === 'armor' ? 'thud' : 'slash');
+        audio.play(weapon === 'spearshield' ? 'thud' : 'slash');
       }
       if (vfx && vfx.meleeSlash) {
-        const slashColor = charId === 'pip' ? 0x00f0ff : (charId === 'mist' ? 0xa259ff : 0xffffff);
+        const slashColor = weapon === 'spear' ? 0xbef2ff : (weapon === 'spearshield' ? 0xffd772 : 0xffffff);
         vfx.meleeSlash(t.x, 1.2, t.z, t.facing, slashColor);
       }
       applyHit(t, tgt);
@@ -450,85 +471,108 @@ export function buildTroops({ towers, vfx = null, audio = null, onHit = null, on
   }
 
   /**
-   * Walk cycle. Legs and arms are swung only when the model actually has them -
-   * several characters are built without limbs, and inventing a hidden joint
-   * to animate would be a lie about a mesh that is not there.
+   * Combat stance the legs settle into while a fighter is locked on a target:
+   * front foot toward the enemy, rear foot braced. Eased rather than set, so
+   * the legs glide out of a mid-stride walk pose instead of freezing in one -
+   * that frozen stride was the biggest single source of stiffness. Walking
+   * overwrites the legs outright on the next frame, and the idle ease relaxes
+   * the stance once the fight moves on.
+   */
+  const STANCE = { legL: -0.22, legR: 0.14 };
+  function stance(t, dt) {
+    const s = Math.min(1, dt * 10);
+    if (t.model.legL) t.model.legL.rotation.x += (STANCE.legL - t.model.legL.rotation.x) * s;
+    if (t.model.legR) t.model.legR.rotation.x += (STANCE.legR - t.model.legR.rotation.x) * s;
+  }
+
+  /**
+   * Walk, windup, strike and idle motion.
+   *
+   * The strike poses are per weapon archetype (the card's `weapon` field), not
+   * per character id - the animation follows what the fighter visibly holds.
+   * Every windup BLENDS from the pose the body was actually in when the windup
+   * started (poseFrom), which is what unstiffened the old version: a pose that
+   * teleports on frame one and freezes for its duration reads as robotic, and
+   * the worst offender was legs frozen mid-stride for a whole fight. The legs
+   * now settle into a combat stance while locked on (see stance()), the torso
+   * leans with each phase, and a standing fighter breathes.
    */
   function animate(t, dt) {
+    const weapon = weaponOf(t);
     if (t.attackState === 'windup') {
-      const charId = t.card ? t.card.id : '';
-      const isThrust = charId === 'pip' || charId === 'mrhat';
-      const isRanged = charId === 'honey' || charId === 'goggles' || charId === 'lavender' || (t.stats && t.stats.range > 2.0 && charId !== 'armor');
+      const w = t.windupMax > 0 ? Math.min(1, Math.max(0, 1 - t.windupT / t.windupMax)) : 1;
+      const e = 1 - Math.pow(1 - w, 2); // ease-out into the anticipation pose
+      const from = t.poseFrom || { armRx: 0, armRz: 0, armLx: 0, meshRx: 0 };
+      const mix = (fromV, toV) => fromV + (toV - fromV) * e;
 
-      if (isRanged) {
-        if (t.model.armR) {
-          t.model.armR.rotation.x = 1.45;
-          t.model.armR.position.z = -0.15;
-        }
+      if (weapon === 'bow') {
+        // Bow arm levels at the target while the draw hand pulls back to the cheek.
         if (t.model.armL) {
-          t.model.armL.rotation.x = 1.25;
-          t.model.armL.position.z = 0.08;
+          t.model.armL.rotation.x = mix(from.armLx, -1.5);
+          t.model.armL.position.z = mix(0, 0.1);
         }
-      } else if (isThrust) {
         if (t.model.armR) {
-          t.model.armR.rotation.x = -0.55;
-          t.model.armR.position.z = -0.28;
+          t.model.armR.rotation.x = mix(from.armRx, 0.9);
+          t.model.armR.position.z = mix(from.armRz, -0.35);
         }
-        if (t.model.armL) {
-          t.model.armL.rotation.x = 0.35;
-        }
-      } else {
+        t.mesh.rotation.x = mix(from.meshRx, -0.06);
+      } else if (weapon === 'spear' || weapon === 'spearshield') {
+        // Cock the spear back over the shoulder; a shield arm plants forward.
         if (t.model.armR) {
-          t.model.armR.rotation.x = -1.15;
-          t.model.armR.position.z = -0.2;
+          t.model.armR.rotation.x = mix(from.armRx, 0.55);
+          t.model.armR.position.z = mix(from.armRz, -0.3);
         }
-        if (t.model.armL) {
-          t.model.armL.rotation.x = 0.45;
+        if (t.model.armL) t.model.armL.rotation.x = mix(from.armLx, weapon === 'spearshield' ? -0.55 : 0.25);
+        t.mesh.rotation.x = mix(from.meshRx, -0.1);
+      } else { // sword
+        // Raise the blade up and behind the head, torso coiling back.
+        if (t.model.armR) {
+          t.model.armR.rotation.x = mix(from.armRx, 2.4);
+          t.model.armR.position.z = mix(from.armRz, -0.12);
         }
+        if (t.model.armL) t.model.armL.rotation.x = mix(from.armLx, -0.3);
+        t.mesh.rotation.x = mix(from.meshRx, -0.14);
       }
-      t.mesh.rotation.x = -0.12;
+      stance(t, dt);
+      t.mesh.position.y = 0;
     } else if (t.lunge > 0) {
-      // k moves from 0 (start of hit) to 1 (end of recovery)
+      // k moves from 0 (hit lands) to 1 (recovery done). Each weapon gets its
+      // own release curve: an ease-out so the strike snaps through the target
+      // early and settles, instead of one sine that moves the same speed all
+      // the way through.
       const k = 1 - t.lunge;
-      const charId = t.card ? t.card.id : '';
-      const isThrust = charId === 'pip' || charId === 'mrhat';
-      const isRanged = charId === 'honey' || charId === 'goggles' || charId === 'lavender' || (t.stats && t.stats.range > 2.0 && charId !== 'armor');
+      const settle = Math.sin(k * Math.PI);
 
-      if (isThrust) {
-        // Thrust animation: forward z translation with focused arm drive
-        const thrust = Math.sin(k * Math.PI);
+      if (weapon === 'bow') {
+        const release = 1 - Math.pow(1 - k, 3);
         if (t.model.armR) {
-          t.model.armR.rotation.x = thrust * 0.75;
-          t.model.armR.position.z = thrust * 0.42;
+          t.model.armR.rotation.x = 0.9 - 2.0 * release;
+          t.model.armR.position.z = -0.35 + 0.5 * release;
         }
         if (t.model.armL) {
-          t.model.armL.rotation.x = -thrust * 0.35;
+          t.model.armL.rotation.x = -1.5 + 0.4 * settle;
+          t.model.armL.position.z = 0.1 - 0.12 * settle;
         }
-        t.mesh.rotation.x = thrust * 0.16;
-      } else if (isRanged) {
-        // Aiming pose with recoil kickback
-        const recoil = Math.sin(k * Math.PI);
+        t.mesh.rotation.x = -0.1 * settle;
+      } else if (weapon === 'spear' || weapon === 'spearshield') {
+        const thrust = 1 - Math.pow(1 - k, 2);
         if (t.model.armR) {
-          t.model.armR.rotation.x = 1.35 - recoil * 0.55;
-          t.model.armR.position.z = -recoil * 0.18;
+          t.model.armR.rotation.x = 0.55 - 1.5 * thrust;
+          t.model.armR.position.z = -0.3 + 0.85 * thrust;
         }
-        if (t.model.armL) {
-          t.model.armL.rotation.x = 1.25 - recoil * 0.45;
-          t.model.armL.position.z = -recoil * 0.15;
-        }
-        t.mesh.rotation.x = -recoil * 0.12;
-      } else {
-        // Slashing / punching swing
-        const slashAngle = Math.sin(k * Math.PI) * 1.55;
+        if (t.model.armL) t.model.armL.rotation.x = weapon === 'spearshield' ? -0.55 + 0.15 * thrust : 0.25 - 0.55 * thrust;
+        t.mesh.rotation.x = 0.2 * settle;
+      } else { // sword
+        const swing = 1 - Math.pow(1 - k, 2);
         if (t.model.armR) {
-          t.model.armR.rotation.x = slashAngle;
-          t.model.armR.position.z = Math.sin(k * Math.PI) * 0.25;
+          t.model.armR.rotation.x = 2.4 - 3.7 * swing;
+          t.model.armR.position.z = -0.12 + 0.32 * swing;
         }
-        if (t.model.armL) {
-          t.model.armL.rotation.x = -slashAngle * 0.4;
-        }
-        t.mesh.rotation.x = Math.sin(k * Math.PI) * 0.22;
+        if (t.model.armL) t.model.armL.rotation.x = -0.3 + 0.3 * swing;
+        t.mesh.rotation.x = 0.26 * settle;
       }
+      stance(t, dt);
+      t.mesh.position.y = 0;
     } else if (t.moving) {
       t.walk += dt * t.stats.speed * 3.4;
       const swing = Math.sin(t.walk) * 0.55;
@@ -540,8 +584,11 @@ export function buildTroops({ towers, vfx = null, audio = null, onHit = null, on
         t.model.armR.position.z = 0;
       }
       t.mesh.rotation.x = 0;
+      t.mesh.position.y = 0;
     } else {
-      // Ease limbs and mesh back to neutral when not moving or lunging
+      // Ease limbs and mesh back to neutral when not moving or lunging, then
+      // breathe: a slow chest bob plus a faint arm sway, so a fighter holding
+      // a lane reads as alive rather than as a paused animation.
       const ease = (g) => {
         if (g) {
           g.rotation.x *= Math.max(0, 1 - dt * 10);
@@ -551,6 +598,11 @@ export function buildTroops({ towers, vfx = null, audio = null, onHit = null, on
       ease(t.model.legL); ease(t.model.legR);
       ease(t.model.armL); ease(t.model.armR);
       t.mesh.rotation.x *= Math.max(0, 1 - dt * 10);
+
+      t.breath += dt * 2.4;
+      t.mesh.position.y = Math.sin(t.breath) * 0.035;
+      if (t.model.armL) t.model.armL.rotation.x += Math.sin(t.breath) * 0.04;
+      if (t.model.armR) t.model.armR.rotation.x += Math.sin(t.breath * 0.9) * 0.04;
     }
 
     t.root.position.set(t.x, 0, t.z);
@@ -645,7 +697,17 @@ export function buildTroops({ towers, vfx = null, audio = null, onHit = null, on
             t.facing = Math.atan2(tgt.ref.x - t.x, tgt.ref.z - t.z);
             if (t.swing <= 0) {
               t.attackState = 'windup';
-              t.windupT = 0.12;
+              const weapon = weaponOf(t);
+              t.windupMax = WINDUP[weapon] || 0.12;
+              t.windupT = t.windupMax;
+              // Capture where the limbs are right now so the windup blends
+              // from the actual body pose instead of snapping from neutral.
+              t.poseFrom = {
+                armRx: t.model.armR ? t.model.armR.rotation.x : 0,
+                armRz: t.model.armR ? t.model.armR.position.z : 0,
+                armLx: t.model.armL ? t.model.armL.rotation.x : 0,
+                meshRx: t.mesh.rotation.x,
+              };
               t.swing = t.stats.hitEvery;
               t.attackTarget = tgt;
             }
