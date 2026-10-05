@@ -78,9 +78,11 @@ class geo {
     this.type = 'BufferGeometry';
   }
   dispose() {}
+  setAttribute() {}
   translate() {}
   rotateX() {}
   rotateY() {}
+  rotateZ() {}
   scale() {}
   setFromPoints() {}
   computeVertexNormals() {}
