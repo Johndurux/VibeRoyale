@@ -8,7 +8,9 @@
 // the opponent's is -Z.
 export const ARENA = {
   halfWidth: 11,      // x extent of the floor
-  halfLength: 17,     // z extent of the floor
+  halfLength: 22,     // z extent of the floor - deepened so a push has real
+                      // ground to cross after the bridge before it reaches a
+                      // tower; camera and towers are retuned against this.
   // Lane centre lines. Phase 1 draws the three lanes and the deal bridge;
   // phases 3-4 reuse these exact numbers for unit movement and bot AI.
   laneX: [-6.2, 0, 6.2],
@@ -184,10 +186,12 @@ export const TOWERS = {
   kingDamage: 55,
   // Side positions, per side ('player' = +Z, 'enemy' = -Z).
   // King sits centre-back; the two ATM towers guard the side lanes forward.
-  king: { x: 0, z: 13.2 },
+  // Proportions held from the 17-deep pit (king ~0.78 of the half length,
+  // side towers ~0.50) so tower sight lines cover the lanes the same way.
+  king: { x: 0, z: 17.2 },
   small: [
-    { x: -6.2, z: 8.4 },
-    { x: 6.2, z: 8.4 },
+    { x: -6.2, z: 10.9 },
+    { x: 6.2, z: 10.9 },
   ],
 };
 

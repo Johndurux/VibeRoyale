@@ -107,7 +107,7 @@ export const camera = new THREE.PerspectiveCamera(
 // destruction zoom-in has one authoritative place to return to, rather than
 // three modules each keeping their own copy of "where the camera normally is"
 // and drifting apart.
-export const CAM_ORIGIN = { x: 0, y: 21.5, z: 23.5, lookX: 0, lookY: 0, lookZ: -1.8 };
+export const CAM_ORIGIN = { x: 0, y: 24.5, z: 29.5, lookX: 0, lookY: 0, lookZ: -1.4 };
 camera.position.set(CAM_ORIGIN.x, CAM_ORIGIN.y, CAM_ORIGIN.z);
 camera.lookAt(CAM_ORIGIN.lookX, CAM_ORIGIN.lookY, CAM_ORIGIN.lookZ);
 

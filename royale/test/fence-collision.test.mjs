@@ -7,7 +7,7 @@ const FENCE_SPAN_Z = 5.8;  // Length of bridge railing
 const RIVER_HALF_W = 2.9;  // River bank edge
 const RIVER_HALF_L = 5.2;  // River bank Z edge
 const ARENA_HW = 11.0;
-const ARENA_HL = 17.0;
+const ARENA_HL = 22.0;
 
 export function passable(x, z) {
   const ax = Math.abs(x);
