@@ -19,6 +19,68 @@ import { RARITY, CARDS } from './config.js';
 // portrait pipeline, not two that can drift apart.
 export const FACE_PX = 96;
 
+// The three spell sigils, drawn straight onto the 2D card face rather than in
+// 3D. A spell is an area, not a body, so the mark is a ring with a shape inside
+// it: the ring is the blast radius, which is what the player is actually
+// judging when they choose a spell over a troop.
+const SPELL_SIGIL = {
+  fireball: { core: '#FF6A2A', edge: '#FFD27A', shape: 'burst' },
+  freeze: { core: '#6AD8FF', edge: '#D8F4FF', shape: 'shard' },
+  heal: { core: '#5BD97A', edge: '#D6FFDF', shape: 'cross' },
+};
+
+/**
+ * Paint a spell's sigil into a card face.
+ * @param {CanvasRenderingContext2D} ctx the face's 2D context
+ * @param {object} char a CHARACTERS / SPELL_CARDS entry
+ */
+function drawSpellGlyph(ctx, char) {
+  if (!ctx) return;
+  const s = SPELL_SIGIL[char.spell] || SPELL_SIGIL.fireball;
+  const c = FACE_PX / 2;
+  const r = FACE_PX * 0.34;
+  ctx.clearRect(0, 0, FACE_PX, FACE_PX);
+  ctx.beginPath();
+  ctx.arc(c, c, r, 0, Math.PI * 2);
+  ctx.fillStyle = s.core;
+  ctx.fill();
+  ctx.lineWidth = FACE_PX * 0.05;
+  ctx.strokeStyle = s.edge;
+  ctx.stroke();
+  ctx.fillStyle = s.edge;
+  ctx.strokeStyle = s.edge;
+  ctx.lineCap = 'round';
+  if (s.shape === 'burst') {
+    // Fireball: radiating spokes.
+    ctx.lineWidth = FACE_PX * 0.045;
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      ctx.beginPath();
+      ctx.moveTo(c + Math.cos(a) * r * 0.34, c + Math.sin(a) * r * 0.34);
+      ctx.lineTo(c + Math.cos(a) * r * 0.8, c + Math.sin(a) * r * 0.8);
+      ctx.stroke();
+    }
+  } else if (s.shape === 'shard') {
+    // Freeze: a six-point star.
+    ctx.beginPath();
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2 - Math.PI / 2;
+      const x = c + Math.cos(a) * r * 0.78;
+      const y = c + Math.sin(a) * r * 0.78;
+      if (i) ctx.lineTo(x, y);
+      else ctx.moveTo(x, y);
+    }
+    ctx.closePath();
+    ctx.fill();
+  } else {
+    // Heal: a cross, the one mark everyone already reads correctly.
+    const t = r * 0.26;
+    const l = r * 0.74;
+    ctx.fillRect(c - t, c - l, t * 2, l * 2);
+    ctx.fillRect(c - l, c - t, l * 2, t * 2);
+  }
+}
+
 // buildTowers() pushes king, then small[0] (x = -6.2), then small[1] (x = +6.2),
 // so filtering by side preserves that order and these labels stay true.
 const ROWS = ['KING', 'LEFT', 'RIGHT'];
@@ -92,6 +154,17 @@ export function renderFaces(targets) {
 
   for (const t of targets) {
     const g = t.char.build();
+    // Spells have no unit to construct - SPELL_CARDS entries return null from
+    // build() on purpose - so they get a flat sigil on the card face instead of
+    // a portrait. Without this branch every spell card threw while building the
+    // lobby grid, because the caller here assumed build() always returns a
+    // mesh. The three sigils are drawn from the spell's own identity rather
+    // than from a shared placeholder, so FIREBALL, FREEZE and HEAL are
+    // distinguishable at 44px.
+    if (!g) {
+      drawSpellGlyph(t.ctx, t.char);
+      continue;
+    }
     s.add(g);
     r.render(s, cam);
     t.ctx.clearRect(0, 0, FACE_PX, FACE_PX);
@@ -312,6 +385,26 @@ export function createUI({ towerKit, camera, onCardPick, onResult }) {
   const result = document.getElementById('result');
   const resultTitle = document.getElementById('resultTitle');
   const resultSub = document.getElementById('resultSub');
+  const btnPlayAgain = document.getElementById('btnPlayAgain');
+  const btnChangeDeck = document.getElementById('btnChangeDeck');
+
+  let currentPlayAgain = null;
+  let currentChangeDeck = null;
+
+  if (btnPlayAgain) {
+    btnPlayAgain.addEventListener('click', () => {
+      const cb = currentPlayAgain;
+      reset();
+      if (cb) cb();
+    });
+  }
+  if (btnChangeDeck) {
+    btnChangeDeck.addEventListener('click', () => {
+      const cb = currentChangeDeck;
+      reset();
+      if (cb) cb();
+    });
+  }
 
   // Elixir is a float, not a count. That is the whole fix: as an integer it
   // could only ever hold whole drops, so the partial progress toward the next
@@ -356,11 +449,41 @@ export function createUI({ towerKit, camera, onCardPick, onResult }) {
   }
 
   /**
+   * Reset the HUD result screen, confetti, and settled flag for a new match.
+   */
+  function reset() {
+    settled = false;
+    currentPlayAgain = null;
+    currentChangeDeck = null;
+    if (result) {
+      result.classList.remove('on', 'lose');
+      result.querySelectorAll('.confetti').forEach((c) => c.remove());
+    }
+    elixir = ELIXIR_MAX / 2;
+    elixirShown = -1;
+    elixirFillShown = -1;
+    if (roster) {
+      roster.select(null);
+      roster.markAffordable(elixir);
+    }
+  }
+
+  /**
    * Fill the result overlay with gold confetti and show it.
    * @param {boolean} won
+   * @param {string|object} [reason]
+   * @param {object} [payload]
    */
-  function showResult(won) {
-    if (!result || settled) return;
+  function showResult(won, reason, payload) {
+    if (!result) return;
+    const data = (payload && typeof payload === 'object')
+      ? payload
+      : (reason && typeof reason === 'object') ? reason : null;
+    if (data) {
+      if (typeof data.onPlayAgain === 'function') currentPlayAgain = data.onPlayAgain;
+      if (typeof data.onChangeDeck === 'function') currentChangeDeck = data.onChangeDeck;
+    }
+    if (settled) return;
     settled = true;
     // Reported before the overlay is built, so main.js can stop the bot and
     // pick a cue without waiting on any DOM work.
@@ -380,6 +503,16 @@ export function createUI({ towerKit, camera, onCardPick, onResult }) {
       result.appendChild(bit);
     }
     result.classList.add('on');
+  }
+
+  /**
+   * Rich result handler passed from main.js endMatch().
+   * @param {object} payload
+   */
+  function showResultPanel(payload) {
+    if (!payload) return;
+    const won = payload.winner === 'player' || !!payload.won;
+    showResult(won, payload.reason, payload);
   }
 
   function update(dt = 0) {
@@ -510,6 +643,8 @@ export function createUI({ towerKit, camera, onCardPick, onResult }) {
     popDamage,
     popDamageAt,
     showResult,
+    showResultPanel,
+    reset,
     spend,
     // Delegated to the live roster rather than bound at build time, because
     // setDeck() swaps `roster` for a new hand. A reference captured here would

@@ -291,12 +291,21 @@ function makeTower(kind, x, z, side) {
   g.position.set(x, 0, z);
   g.rotation.y = side === 'player' ? 0 : Math.PI;
 
+  const range = isKing ? (TOWERS.kingRange || 7.0) : (TOWERS.smallRange || 7.5);
+  const fireRate = isKing ? (TOWERS.kingFireRate || 1.0) : (TOWERS.smallFireRate || 0.9);
+  const damage = isKing ? (TOWERS.kingDamage || 55) : (TOWERS.smallDamage || 42);
+
   const tower = {
     kind, side, x, z,
     mesh: g, cv, tex, maxHp, hp: maxHp,
     glitch: 0, seed: 0,
     destroyed: false,
     wrecked: false,
+    range,
+    fireRate,
+    damage,
+    cooldown: Math.random() * 0.3,
+    target: null,
   };
 
   drawHpScreen(cv, 1, '100%', 0, 0);
@@ -317,15 +326,24 @@ function makeTower(kind, x, z, side) {
 let hitListener = null;
 export function setHitListener(fn) { hitListener = fn; }
 
+// Wreck listener, raised once per tower when the shatter begins - the moment
+// the roof comes off, NOT when the stump finishes sinking. main.js subscribes
+// and throws rubble and shakes the camera. Late by a whole second is too late:
+// the shake has to land with the collapse, or the impact is silent.
+let wreckListener = null;
+export function setWreckListener(fn) { wreckListener = fn; }
+
 export function damageTower(tower, amount) {
   if (tower.destroyed) return false;
   tower.hp = Math.max(0, tower.hp - amount);
   tower.glitch = 1;
   tower.seed = (tower.seed + 7) % 1000;
-  const ko = tower.hp <= 0;
   if (tower.hp <= 0) {
+    // `destroyed` flips immediately so nothing can target the corpse, but the
+    // model stays up and lit for the next third of a second. The kill and the
+    // collapse are deliberately not the same event.
     tower.destroyed = true;
-    wreck(tower);
+    beginDeath(tower);
     if (hitListener) hitListener(tower, amount, true);
     return true;
   }
@@ -334,24 +352,110 @@ export function damageTower(tower, amount) {
 }
 
 /**
- * A liquidated tower should not look like a live one that happens to read KO.
- * Sinks it into the floor, tips it and kills the neon. Materials are shared
- * through the voxel cache, so the neon is dimmed by scaling the meshes that
- * use it rather than by touching the material.
+ * How tall a tower is, used to scale the death animation.
+ *
+ * A fixed shake amplitude and a fixed sink depth look wrong on both towers: a
+ * 3.5-unit small tower juddering a full 0.4 units looks like it is falling
+ * over, and a 5.4-unit king sinking the same amount barely registers. Both are
+ * derived from height so the collapse reads at the same apparent rate.
+ * @param {object} tower
+ * @returns {number}
+ */
+function towerHeight(tower) {
+  return tower.kind === 'king' ? 5.4 : 3.5;
+}
+
+/**
+ * Begin the three-step death: shake, shatter, wreck.
+ *
+ * The previous version did all three in a single frame - the tower just
+ * appeared tipped over and half-buried, with no transition. That reads as a
+ * bug rather than as a kill, and the player never gets to watch the thing
+ * they spent three minutes working towards actually come down.
+ *
+ * Driven from buildTowers' update() rather than from timers, so the collapse
+ * freezes with the rest of the simulation when the match does (main.js stops
+ * calling update once matchLive is false). A tower that keeps sinking after
+ * the result screen is up is the game losing track of its own state.
+ *
+ * `destroyed` has already flipped by the time this is called, so the tower is
+ * already untargetable - the kill and the collapse are deliberately separate
+ * events that happen to start together.
+ *
  * @param {object} tower
  */
-function wreck(tower) {
-  if (tower.wrecked) return;
-  tower.wrecked = true;
-  tower.mesh.position.y = -1.4;
-  tower.mesh.rotation.z = 0.16 * (tower.side === 'player' ? 1 : -1);
-  for (const child of tower.mesh.children) {
-    // The neon strips. The HP screen is also a MeshBasicMaterial (it has to be,
-    // to stay emissive), so keying on the material alone would blank the
-    // readout too and the tower would read as dead furniture instead of KO.
-    // `map` is what separates the two: neon has none, the screen has a canvas.
-    const isNeon = child.material && child.material.isMeshBasicMaterial && !child.material.map;
-    if (isNeon) child.scale.setScalar(0.001);
+function beginDeath(tower) {
+  if (tower.deathStep) return;
+  tower.deathStep = 'shaking';
+  tower.deathT = 0;
+  // Ground level is the baseline both steps animate away from, captured once
+  // so the shake and the sink do not each re-derive it and drift apart.
+  tower.baseY = tower.mesh.position.y;
+  tower.baseRotZ = tower.mesh.rotation.z;
+  tower.height = towerHeight(tower);
+}
+
+/**
+ * Advance one tower's death animation by dt seconds.
+ *
+ * A string step rather than three booleans: no combination of booleans can be
+ * simultaneously true, and the state is legible in the dev probe.
+ * @param {object} tower
+ * @param {number} dt
+ */
+function stepDeath(tower, dt) {
+  tower.deathT += dt;
+  const m = tower.mesh;
+  const h = tower.height;
+
+  if (tower.deathStep === 'shaking') {
+    // Decaying judder, driven off deathT rather than re-rolled per frame:
+    // re-rolling at 60fps is white noise, and this has to read as one
+    // continuous shudder travelling through the structure.
+    const k = 1 - tower.deathT / TOWERS.deathShake;
+    const amp = 0.09 * h * k;
+    m.position.x = tower.x + Math.sin(tower.deathT * 47) * amp;
+    m.position.y = tower.baseY + Math.sin(tower.deathT * 63) * amp * 0.35;
+    // The readout is pinned wide open for the whole shake, so KO arrives
+    // already flaring instead of switching cleanly to a static red 0%.
+    tower.glitch = Math.max(tower.glitch, 0.55 + 0.45 * k);
+    if (tower.deathT >= TOWERS.deathShake) {
+      m.position.set(tower.x, tower.baseY, tower.z);
+      tower.deathStep = 'shattering';
+      tower.deathT = 0;
+      if (wreckListener) wreckListener(tower);
+    }
+    return;
+  }
+
+  if (tower.deathStep === 'shattering') {
+    // The roof, crown and neon die here. Scaling the meshes rather than
+    // touching the material, because voxel.js shares materials between every
+    // tower in the game and disposing or recolouring one would recolour all six.
+    for (const child of m.children) {
+      const isNeon = child.material && child.material.isMeshBasicMaterial && !child.material.map;
+      if (isNeon) child.scale.setScalar(0.001);
+    }
+    tower.glitch = 1;
+    if (tower.deathT >= TOWERS.deathShatter) {
+      tower.deathStep = 'wrecking';
+      tower.deathT = 0;
+    }
+    return;
+  }
+
+  if (tower.deathStep === 'wrecking') {
+    // Ease the sink and tip so it beds into the ground rather than stopping
+    // dead. Linear reads as the mesh being dragged down by a script.
+    const k = Math.min(1, tower.deathT / TOWERS.deathWreck);
+    const ease = 1 - (1 - k) * (1 - k);
+    m.position.y = tower.baseY - 1.4 * (h / 3.5) * ease;
+    m.rotation.z = tower.baseRotZ
+      + 0.16 * (tower.side === 'player' ? 1 : -1) * ease;
+    if (k >= 1) {
+      tower.deathStep = 'wrecked';
+      tower.wrecked = true;
+    }
   }
 }
 
@@ -369,8 +473,16 @@ export function buildTowers() {
   }
   for (const t of towers) root.add(t.mesh);
 
-  function update(dt) {
+  function isTowerActive(tower) {
+    if (tower.destroyed) return false;
+    if (tower.kind !== 'king') return true;
+    if (tower.hp < tower.maxHp) return true;
+    return towers.some((t) => t.side === tower.side && t.kind === 'small' && t.destroyed);
+  }
+
+  function update(dt, combat = null) {
     for (const t of towers) {
+      if (t.deathStep) stepDeath(t, dt);
       const ratio = t.hp / t.maxHp;
       const label = t.destroyed ? 'KO' : `${Math.ceil(ratio * 100)}%`;
       if (t.holdGlitch) {
@@ -383,8 +495,99 @@ export function buildTowers() {
       }
       drawHpScreen(t.cv, ratio, label, t.glitch, t.seed + Math.floor(t.glitch * 30));
       t.tex.needsUpdate = true;
+
+      // Active tower defense shooting
+      if (combat && combat.troops && isTowerActive(t)) {
+        t.cooldown -= dt;
+        const enemySide = t.side === 'player' ? 'enemy' : 'player';
+        const isTargetValid = (u) => u && !u.dead && Math.hypot(u.x - t.x, u.z - t.z) <= t.range;
+
+        if (!isTargetValid(t.target)) {
+          t.target = null;
+          const candidates = combat.troops.troops.filter((u) => !u.dead && u.side === enemySide);
+          let bestDist = t.range;
+          let bestTroop = null;
+          for (const u of candidates) {
+            const d = Math.hypot(u.x - t.x, u.z - t.z);
+            if (d < bestDist) {
+              bestDist = d;
+              bestTroop = u;
+            }
+          }
+          t.target = bestTroop;
+        }
+
+        if (t.target && t.cooldown <= 0) {
+          t.cooldown = t.fireRate;
+          const tgt = t.target;
+          const dmg = t.damage;
+          const startY = t.kind === 'king' ? 5.2 : 3.6;
+
+          if (combat.audio) combat.audio.play('arrow');
+
+          const onHitCallback = () => {
+            if (!tgt || tgt.dead) return;
+            tgt.hp -= dmg;
+            if (combat.vfx && combat.vfx.hitSparks) {
+              combat.vfx.hitSparks(tgt.x, 1.4, tgt.z, 0xffe066);
+            }
+            if (tgt.hp <= 0) {
+              tgt.dead = true;
+              tgt.deathT = 0.26;
+              if (combat.vfx && combat.vfx.koPoof) {
+                combat.vfx.koPoof(tgt.x, tgt.z, tgt.card ? tgt.card.color : 0xffffff);
+              }
+              if (combat.audio) combat.audio.play('pop');
+            }
+            if (combat.onHit) combat.onHit(tgt, dmg);
+          };
+
+          const shotColor = t.side === 'player' ? 0x6fe6ff : 0xff7b54;
+          if (combat.vfx && combat.vfx.towerProjectile) {
+            combat.vfx.towerProjectile(t.x, startY, t.z, tgt, 18, onHitCallback, shotColor);
+          } else if (combat.vfx && combat.vfx.arrowProjectile) {
+            combat.vfx.arrowProjectile(t.x, startY, t.z, tgt, 18, onHitCallback, shotColor);
+          } else {
+            onHitCallback();
+          }
+        }
+      }
     }
   }
 
-  return { root, towers, update, damageTower };
+  function reset() {
+    for (const t of towers) {
+      const old = t.mesh;
+      // makeTower returns the whole tower record - the scene graph is the
+      // .mesh inside it. Storing the record in t.mesh used to be what happened
+      // here, and root.add() then refused it as "not an instance of
+      // Object3D", so every match started by taking all six towers off the
+      // board and never putting them back. The record object itself is kept,
+      // because main.js and the death animation both hold these references.
+      const fresh = makeTower(t.kind, t.x, t.z, t.side);
+      t.hp = t.maxHp;
+      t.destroyed = false;
+      t.wrecked = false;
+      t.deathStep = null;
+      t.deathT = 0;
+      t.glitch = 0;
+      t.height = 0;
+      t.range = fresh.range;
+      t.fireRate = fresh.fireRate;
+      t.damage = fresh.damage;
+      t.cooldown = Math.random() * 0.3;
+      t.target = null;
+      t.mesh = fresh.mesh;
+      // The HP screen is painted into this tower's own canvas, so the new mesh
+      // and the record have to agree on which canvas that is. Swapping the mesh
+      // alone would leave the fresh screens wired to a canvas nothing draws
+      // into - a frozen 100% that never shows another hit.
+      t.cv = fresh.cv;
+      t.tex = fresh.tex;
+      root.remove(old);
+      root.add(t.mesh);
+    }
+  }
+
+  return { root, towers, update, reset, damageTower };
 }

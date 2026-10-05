@@ -1,1 +1,24 @@
 .vercel
+
+# node_modules is ignored wholesale, so a real `npm install` can never be
+# committed -- the three/ stub inside it is force-added once (git add -f) and
+# stays tracked from then on, because .gitignore never applies to a file that is
+# already tracked. A negation like `!node_modules/three/**` would be wrong: it
+# would re-include every file of a genuine three install too.
+#
+# Why the stub is committed at all: nine src/ modules do
+# `import * as THREE from 'three'`, which the browser resolves through the
+# import map in index.html. Node has no import map, so without the stub the
+# whole dependency graph stops resolving the moment characters.js reaches
+# voxel.js and every suite dies on an identical error. It lives in node_modules
+# because that is the only place Node resolves a bare specifier.
+node_modules/
+
+# One-off CDP probe scripts, their screenshots and console captures. The
+# harnesses worth keeping live in test/ and smoke-main.mjs; these were scratch
+# work for a single audit and are kept local only.
+.t1.txt
+cdp-*.mjs
+probe-*
+match-*.txt
+match-report.json

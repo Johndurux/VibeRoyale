@@ -93,7 +93,7 @@ const rand = (a, b) => a + Math.random() * (b - a);
  *   cue, so the other side of the river is audible without the bot ever
  *   importing audio.
  */
-export function createBot({ troops, towers, deck = null, difficulty = 'normal', onDeploy = null }) {
+export function createBot({ troops, towers, spells = null, deck = null, difficulty = 'normal', onDeploy = null }) {
   const byId = new Map(CHARACTERS.map((c) => [c.id, c]));
   // An empty or unknown deck falls back to the full roster rather than giving
   // the bot an empty hand - a bot that can never act is the old bug again.
@@ -213,10 +213,77 @@ export function createBot({ troops, towers, deck = null, difficulty = 'normal', 
   function affordable() {
     const out = [];
     for (const id of hand) {
+      const card = byId.get(id);
+      if (card && card.spell) continue; // Spells are evaluated strategically
       const s = CARDS[id];
       if (s && elixir >= s.cost) out.push(id);
     }
     return out;
+  }
+
+  /**
+   * Cast a spell on behalf of the bot.
+   * @param {string} id
+   * @param {number} x
+   * @param {number} z
+   * @returns {boolean}
+   */
+  function castSpell(id, x, z) {
+    if (!spells) return false;
+    const s = CARDS[id];
+    if (!s || elixir < s.cost) return false;
+    const res = spells.cast(id, x, z, 'enemy');
+    if (!res) return false;
+    elixir -= s.cost;
+    if (onDeploy) onDeploy(id, x, z);
+    return true;
+  }
+
+  /**
+   * Evaluate spell opportunities (Fireball clumping / lethal burn, Freeze on tanks).
+   * @returns {boolean} true if a spell was cast
+   */
+  function evaluateSpells() {
+    if (!spells) return false;
+
+    const pTroops = troops.troops.filter((t) => !t.dead && t.side === 'player');
+    const playerKing = towers.find((t) => t.side === 'player' && t.kind === 'king');
+
+    // 1. Fireball evaluation
+    if (hand.includes('fireball') && CARDS.fireball && elixir >= CARDS.fireball.cost) {
+      // Lethal burn check: player king tower under 340 HP
+      if (playerKing && !playerKing.destroyed && playerKing.hp < 340) {
+        return castSpell('fireball', playerKing.x, playerKing.z);
+      }
+
+      // Clumping check: 2 or more player troops within 2.5 blast radius near bridges or towers
+      for (const t1 of pTroops) {
+        const cluster = pTroops.filter((t2) => Math.hypot(t2.x - t1.x, t2.z - t1.z) <= 2.5);
+        if (cluster.length >= 2) {
+          let sx = 0, sz = 0;
+          for (const c of cluster) { sx += c.x; sz += c.z; }
+          const cx = sx / cluster.length;
+          const cz = sz / cluster.length;
+          return castSpell('fireball', cx, cz);
+        }
+      }
+    }
+
+    // 2. Freeze evaluation
+    if (hand.includes('freeze') && CARDS.freeze && elixir >= CARDS.freeze.cost) {
+      // Check for dangerous player unit approaching bot towers within attack distance
+      const botTowers = towers.filter((t) => t.side === 'enemy' && !t.destroyed);
+      const danger = pTroops.find((t) => {
+        if (t.frozen > 0.5) return false;
+        const nearTower = botTowers.some((bt) => Math.hypot(t.x - bt.x, t.z - bt.z) <= 5.8);
+        return nearTower && (t.card?.id === 'armor' || t.hp >= 550 || t.z < -3.5);
+      });
+      if (danger) {
+        return castSpell('freeze', danger.x, danger.z);
+      }
+    }
+
+    return false;
   }
 
   /**
@@ -307,6 +374,7 @@ export function createBot({ troops, towers, deck = null, difficulty = 'normal', 
 
   /** One decision. Called only on the think tick, never per frame. */
   function decide() {
+    if (evaluateSpells()) return;
     const list = threats();
     if (list.length) {
       // Answer the most advanced threat. A lower-level bot sometimes just lets

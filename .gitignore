@@ -1,0 +1,5 @@
+# One-off browser-probe / diagnostic artifacts from audit sessions. None of
+# these are part of the game or its test suites, so they stay local forever.
+.probe-profile/
+.brave-*
+.diag*

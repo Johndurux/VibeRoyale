@@ -300,6 +300,41 @@
       100% { transform: translateY(105vh) rotate(760deg); opacity: 0; }
     }
 
+    .result-actions {
+      display: flex; gap: 14px; margin-top: 26px; pointer-events: auto; z-index: 2;
+    }
+    .result-btn {
+      font-family: var(--font-num); font-size: 20px; line-height: 1;
+      border: 4px solid var(--vr-font-outline); border-radius: 14px;
+      padding: 12px 32px; cursor: pointer;
+      text-shadow: 0 2px 0 rgba(0, 0, 0, 0.45);
+      transition: transform 110ms steps(2), box-shadow 110ms steps(2);
+    }
+    .result-btn.primary {
+      color: #FFF3CE;
+      background: linear-gradient(180deg, var(--vr-hp-green), #3F8F22 52%, #2A6A14);
+      box-shadow: 0 6px 0 #23530F, 0 10px 18px rgba(0, 0, 0, 0.4);
+    }
+    .result-btn.secondary {
+      color: #3A2A12;
+      background: linear-gradient(180deg, var(--gold-hi), var(--vr-gold-border) 52%, var(--vr-gold-shadow));
+      box-shadow: 0 6px 0 var(--vr-gold-shadow), 0 10px 18px rgba(0, 0, 0, 0.4);
+      text-shadow: none;
+    }
+    .result-btn:hover {
+      transform: translateY(-3px);
+    }
+    .result-btn.primary:hover {
+      box-shadow: 0 9px 0 #23530F, 0 12px 20px rgba(0, 0, 0, 0.45);
+    }
+    .result-btn.secondary:hover {
+      box-shadow: 0 9px 0 var(--vr-gold-shadow), 0 12px 20px rgba(0, 0, 0, 0.45);
+    }
+    .result-btn:active {
+      transform: translateY(2px);
+      box-shadow: 0 3px 0 rgba(0, 0, 0, 0.4);
+    }
+
     /* -- lobby -----------------------------------------------------------
        The pre-match screen. Same material as the HUD - gold rims, hard
        outlines, Baloo labels and Bungee numbers - because a lobby in a
@@ -371,6 +406,110 @@
     .lcard-face canvas { display: block; }
     .lcard-name { font-size: 9px; font-weight: 800; line-height: 1.1; }
     .lcard-role { font-size: 7px; font-weight: 600; color: #7A5A28; line-height: 1.2; }
+
+    /* -- card detail tooltip ----------------------------------------------- */
+    #cardTooltip {
+      position: fixed; pointer-events: none; z-index: 60; display: none;
+      flex-direction: column; gap: 4px; padding: 9px 12px;
+      background: rgba(30, 16, 6, 0.95);
+      border: 3px solid var(--vr-gold-border); border-radius: 12px;
+      box-shadow: 0 8px 20px rgba(0, 0, 0, 0.55);
+      color: #FFF3CE; font-family: var(--font); width: 196px;
+      transform: translate(-50%, -100%); margin-top: -10px;
+    }
+    #cardTooltip.on { display: flex; }
+    .tt-head { display: flex; justify-content: space-between; align-items: baseline; border-bottom: 1px solid rgba(255, 201, 74, 0.35); padding-bottom: 3px; }
+    .tt-name { font-family: var(--font-num); font-size: 15px; color: var(--gold-hi); line-height: 1; }
+    .tt-type { font-size: 8px; font-weight: 800; letter-spacing: 1.5px; color: var(--vr-hp-green); }
+    .tt-type.spell { color: #A259FF; }
+    .tt-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 6px; font-size: 9px; font-weight: 700; color: #FFF6E2; margin-top: 2px; }
+    .tt-stats span b { font-family: var(--font-num); font-size: 11px; color: var(--vr-gold-border); margin-right: 2px; }
+    .tt-desc { font-size: 8.5px; font-weight: 600; color: #D8CCA8; line-height: 1.25; margin-top: 3px; }
+
+    /* -- career strip -------------------------------------------------------
+       Deliberately quieter than the deck. The lobby's job is to get you into
+       a match, so the career line reads at a glance and sits still; it is the
+       only part of this panel that does not move unless a number changes. */
+    .lv-career {
+      display: flex; align-items: center; gap: 10px;
+      padding: 7px 11px; margin: 0 auto;
+      width: 100%; max-width: 330px;
+      background: rgba(255, 250, 235, 0.5);
+      border: 2px solid rgba(122, 90, 40, 0.22);
+      border-radius: 12px;
+    }
+    .lv-lvl { display: flex; align-items: baseline; gap: 3px; flex: 0 0 auto; }
+    .lv-lvl b { font-family: var(--font-num); font-size: 20px; line-height: 1; color: var(--vr-ink); }
+    .lv-lvl span { font-size: 8px; font-weight: 800; letter-spacing: 1.5px; color: #7A5A28; }
+    .lv-barwrap { flex: 1 1 auto; min-width: 0; }
+    .lv-bar {
+      height: 9px; border-radius: 5px; overflow: hidden;
+      background: rgba(122, 90, 40, 0.2);
+      box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.18);
+    }
+    .lv-bar i {
+      display: block; height: 100%; width: 0;
+      border-radius: 5px;
+      background: linear-gradient(90deg, #4CC24C, #A8F04C);
+      box-shadow: 0 0 6px rgba(168, 240, 76, 0.7);
+      transition: width 420ms cubic-bezier(0.2, 1, 0.3, 1);
+    }
+    .lv-xp {
+      display: flex; justify-content: space-between; gap: 6px;
+      margin-top: 3px;
+      font-family: var(--font-num); font-size: 8.5px; color: #7A5A28;
+      white-space: nowrap;
+    }
+    /* The streak line is cold and flat with no streak, so a flame that is not
+       lit is visibly unlit instead of just being a small emoji. */
+    .lv-streak {
+      display: flex; align-items: center; gap: 3px; flex: 0 0 auto;
+      font-family: var(--font-num); font-size: 13px; color: #7A5A28;
+    }
+    .lv-flame { font-size: 14px; filter: grayscale(1); opacity: 0.32; transition: filter 260ms, opacity 260ms; }
+    .lv-streak.hot .lv-flame { filter: none; opacity: 1; }
+    .lv-streak.onfire .lv-flame { animation: flamePulse 900ms ease-in-out infinite; }
+    @keyframes flamePulse {
+      0%, 100% { transform: scale(1); filter: drop-shadow(0 0 0 rgba(255, 140, 40, 0)); }
+      50% { transform: scale(1.22); filter: drop-shadow(0 0 5px rgba(255, 140, 40, 0.95)); }
+    }
+    .lv-tier { font-size: 8px; font-weight: 800; letter-spacing: 1px; }
+    .lv-streak.hot .lv-tier { color: #D2691E; }
+    .lv-streak.onfire .lv-tier { color: #D21E1E; }
+
+    /* -- locked cards -------------------------------------------------------
+       Locked cards stay in the grid instead of disappearing, because "there
+       is a sixth fighter at level 5" is the reason to win. Desaturated and
+       dimmed to sit behind the unlocked ones, never removed from layout. */
+    .lcard.locked { cursor: not-allowed; filter: grayscale(0.85) brightness(0.72); }
+    .lcard.locked:hover, .lcard.locked:focus-visible { transform: none; box-shadow: var(--lift); outline: none; }
+    .lcard-lock {
+      position: absolute; inset: 0;
+      display: none; align-items: center; justify-content: center; flex-direction: column;
+      gap: 1px;
+      background: rgba(28, 16, 6, 0.55);
+      border-radius: inherit;
+      color: #FFF3CE; font-size: 8px; font-weight: 800; letter-spacing: 0.5px;
+    }
+    .lcard.locked .lcard-lock { display: flex; }
+    .lcard-lock b { font-family: var(--font-num); font-size: 11px; }
+    /* A card that opened at the level you just reached. Stops pulsing once it
+       is in the deck, so the badge marks the unlock, not the selection. */
+    .lcard-new {
+      position: absolute; top: -5px; right: -5px;
+      display: none; padding: 1px 5px 2px;
+      font-family: var(--font-num); font-size: 7.5px; letter-spacing: 0.5px;
+      color: #23530F;
+      background: linear-gradient(180deg, #A8F04C, #4CC24C);
+      border: 2px solid var(--vr-ink);
+      border-radius: 7px;
+      animation: newPop 1100ms ease-in-out infinite;
+    }
+    .lcard.fresh:not(.on) .lcard-new { display: block; }
+    @keyframes newPop {
+      0%, 100% { transform: scale(1) rotate(-3deg); }
+      50% { transform: scale(1.12) rotate(3deg); }
+    }
     /* A card in the hand is lifted and glowing; one still in the roster is
        not dimmed, so the two states are told apart by the lift rather than
        by a value judgement about what is selected. */
@@ -555,6 +694,20 @@
         <button type="button" id="lobbySound" class="lv-sound">SOUND ON</button>
       </div>
 
+      <!-- The career strip. The lobby is the first screen of a session, so it
+           is the only place the player can see what their wins bought them
+           before the arena takes the screen away. Numbers come from
+           progression.snapshot(); the bar is the same levelProgress the
+           result screen draws, so the two never disagree. -->
+      <div class="lv-career">
+        <div class="lv-lvl"><b id="lvLevelNum">1</b><span>LVL</span></div>
+        <div class="lv-barwrap">
+          <div class="lv-bar"><i id="lvBarFill"></i></div>
+          <div class="lv-xp"><span id="lvXpNum">0 XP</span><span id="lvRecord">0W &middot; 0L</span></div>
+        </div>
+        <div class="lv-streak" id="lvStreak"><span class="lv-flame">&#128293;</span><b id="lvStreakNum">0</b><span class="lv-tier" id="lvTier"></span></div>
+      </div>
+
       <div class="lv-title">PICK YOUR FOUR</div>
       <div class="lv-sub">Tap cards to swap them in. Your deck is the only hand you fight with.</div>
       <div id="lobbyPick" class="lv-pick"></div>
@@ -571,11 +724,16 @@
     <!-- The countdown lives outside .lv-panel so it can cover the whole
          screen, buttons and all, while the buttons are disabled underneath. -->
     <div id="lobbyCount" class="lv-count"><b id="lobbyCountNum">3</b></div>
+    <div id="cardTooltip"></div>
   </div>
 
   <div id="result">
     <div class="ribbon" id="resultTitle">VICTORY</div>
     <div class="ribbon-sub" id="resultSub">RIVAL KING TOWER DOWN</div>
+    <div class="result-actions" id="resultActions">
+      <button type="button" id="btnPlayAgain" class="result-btn primary">PLAY AGAIN</button>
+      <button type="button" id="btnChangeDeck" class="result-btn secondary">CHANGE DECK</button>
+    </div>
   </div>
 
   <div id="contextLost">

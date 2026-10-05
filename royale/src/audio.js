@@ -24,6 +24,21 @@ const STEP_SEC = 60 / BPM / 2; // eighth notes -> 0.3175s per step
 const STEPS = 16;
 const CHORD_ROOTS = [110, 87.31, 130.81, 98]; // A2, F2, C3, G2 - one per bar
 const PENTA = [0, 3, 5, 7, 10, 12, 15, 17, 19, 24]; // semitones above A3
+
+// Tempo per scene, as a multiple of the base BPM. The lobby drags because
+// nobody should feel hurried while picking a deck; overtime pushes because the
+// clock just got shorter and the music has to say so.
+const TEMPO = {
+  lobby: 0.82,
+  battle: 1,
+  overtime: 1.15,
+};
+
+// The lobby progression is a different set of roots, not the same one played
+// quietly. A major I-IV-V-I under a half-time feel and no backbeat lands as
+// "menu music"; the battle loop's Am-F-C-G under a drum kit lands as "match",
+// and the deck screen is the one place that should not feel like a match.
+const LOBBY_ROOTS = [110, 82.41, 87.31, 130.81]; // A2, E2, F2, C3
 const ARP_IDX = [0, 2, 4, 3, 5, 4, 2, 1, 0, 2, 4, 3, 6, 4, 2, 1];
 
 // Minimum seconds between two plays of the same cue. Game events can burst.
@@ -31,6 +46,10 @@ const GAP = {
   hit: 0.055,
   towerHit: 0.075,
   enemyPlace: 0.12,
+  slash: 0.05,
+  thud: 0.06,
+  arrow: 0.05,
+  pop: 0.05,
 };
 
 export function createAudio() {
@@ -44,6 +63,8 @@ export function createAudio() {
   let cityLfo = null;
   let muted = false;
   let musicOn = false;
+  let scene = 'lobby';        // 'lobby' | 'battle' | 'overtime'
+  let tempo = TEMPO.lobby;
   let timer = null;          // the music lookahead timer
   let nextStep = 0;          // ctx time of the next scheduled step
   let stepN = 0;
@@ -174,6 +195,22 @@ export function createAudio() {
           burst(now, 0.09, 0.28, 'highpass', 500);
           osc('sine', 190, 70, now, 0.09, 0.35);
           break;
+        // Melee blade slash / swish
+        case 'slash':
+          burst(now, 0.07, 0.3, 'bandpass', 2200);
+          osc('sawtooth', 680, 220, now, 0.08, 0.18);
+          break;
+        // Heavy blunt impact / hammer
+        case 'thud':
+        case 'blunt':
+          osc('sine', 150, 48, now, 0.14, 0.5);
+          burst(now, 0.09, 0.32, 'lowpass', 650);
+          break;
+        // Arrow release / twang
+        case 'arrow':
+          osc('triangle', 640, 280, now, 0.07, 0.22);
+          burst(now, 0.05, 0.18, 'highpass', 1400);
+          break;
         // A tower takes damage: heavier, longer knock than a troop hit.
         case 'towerHit':
           burst(now, 0.16, 0.4, 'lowpass', 520);
@@ -199,6 +236,21 @@ export function createAudio() {
           osc('square', 880, 880, now, 0.09, 0.15);
           osc('square', 1180, 1180, now + 0.12, 0.14, 0.15);
           break;
+        // Overtime: a descending minor line (A5 G5 F5 E5 D5) over a rising
+        // noise swell, so the pitch falls while the tension climbs. The
+        // detune on the long tail is what stops it sounding like a jingle.
+        case 'overtime': {
+          const seq = [880, 783.99, 698.46, 659.25, 587.33];
+          seq.forEach((f, i) => {
+            osc('triangle', f, f, now + i * 0.1, 0.26, 0.17);
+            osc('square', f / 2, f / 2, now + i * 0.1, 0.2, 0.05);
+          });
+          // A held fifth that slides sharp, under the fall. Without it the
+          // arpeggio alone is too polite to signal that something changed.
+          osc('sawtooth', 220, 233, now + 0.5, 1.1, 0.09);
+          burst(now + 0.5, 1.0, 0.11, 'bandpass', 1400);
+          break;
+        }
         // Victory: a rising major arpeggio (C5 E5 G5 C6), all finals.
         case 'victory': {
           const seq = [523.25, 659.25, 783.99, 1046.5];
@@ -211,6 +263,11 @@ export function createAudio() {
           seq.forEach((f, i) => osc('triangle', f, f * 0.99, now + i * 0.17, 0.32, 0.16));
           break;
         }
+        // Light troop defeat pop / poof
+        case 'pop':
+          osc('sine', 520, 180, now, 0.07, 0.26);
+          burst(now, 0.05, 0.14, 'highpass', 950);
+          break;
         default:
           break;
       }
@@ -246,6 +303,18 @@ export function createAudio() {
     if (cityLfo) { try { cityLfo.stop(); } catch (e) {} cityLfo = null; }
   }
 
+  /**
+   * Seconds per step for the current scene.
+   *
+   * Derived rather than stored, and read fresh by the scheduler on every step,
+   * so a tempo change takes effect at the next step boundary and never
+   * rewrites the already-scheduled future.
+   * @returns {number}
+   */
+  function stepSec() {
+    return STEP_SEC / tempo;
+  }
+
   function kick(t, v) {
     osc('sine', 140, 42, t, 0.16, v);
     burst(t, 0.04, v * 0.25, 'lowpass', 300);
@@ -261,20 +330,65 @@ export function createAudio() {
   }
 
   function scheduleStep(n, t) {
-    if (n % 4 === 0) kick(t, 0.45);
-    if (n % 2 === 1) hat(t, n % 4 === 1 ? 0.14 : 0.08);
+    const inLobby = scene === 'lobby';
     const bar = Math.floor(n / 4);
-    if (n % 4 === 0) bassNote(t, CHORD_ROOTS[bar], 0.22);
-    if (n % 4 === 2) bassNote(t, CHORD_ROOTS[bar] * 1.5, 0.15);
-    arpNote(t, 220 * Math.pow(2, PENTA[ARP_IDX[n]] / 12), 0.09);
+
+    // No drums in the lobby. A backbeat under the deck screen reads as "match
+    // in progress" and pulls the player past the one screen that still needs
+    // them, so the kit is a battle-only voice rather than a quiet one.
+    if (!inLobby) {
+      if (n % 4 === 0) kick(t, 0.45);
+      if (n % 2 === 1) hat(t, n % 4 === 1 ? 0.14 : 0.08);
+    }
+
+    const roots = inLobby ? LOBBY_ROOTS : CHORD_ROOTS;
+    if (n % 4 === 0) bassNote(t, roots[bar], inLobby ? 0.16 : 0.22);
+    if (n % 4 === 2) bassNote(t, roots[bar] * 1.5, inLobby ? 0.10 : 0.15);
+
+    // Overtime lifts the arp a perfect fifth. Same sixteen notes, so the riff
+    // is still recognisably the one that has been playing all match, but a
+    // fifth up it stops sounding like background and starts sounding like a
+    // warning. Changing the notes here would make it a different song.
+    const lift = scene === 'overtime' ? 1.5 : 1;
+    arpNote(t, 220 * lift * Math.pow(2, PENTA[ARP_IDX[n]] / 12), inLobby ? 0.06 : 0.09);
   }
 
   function tick() {
     if (!ctx || !musicOn) return;
     while (nextStep < ctx.currentTime + 0.12) {
       scheduleStep(stepN, nextStep);
-      nextStep += STEP_SEC;
+      nextStep += stepSec();
       stepN = (stepN + 1) % STEPS;
+    }
+  }
+
+  /**
+   * Choose which music is playing. Null-safe before unlock().
+   *
+   * The city bed is battle-only. A crowd in the lobby implies a match that has
+   * already started, and the bed is the single most expensive thing in this
+   * file - it is a permanent looping noise source.
+   *
+   * Unknown names fall back to battle rather than throwing: this is called
+   * from main.js on a state change, and a typo here should not take the match
+   * down with it.
+   *
+   * @param {'lobby'|'battle'|'overtime'} name
+   */
+  function setScene(name) {
+    if (!TEMPO[name]) return;
+    const wasMusic = musicOn;
+    scene = name;
+    tempo = TEMPO[name];
+    if (!ctx) return;
+    if (name === 'lobby') {
+      stopCity();
+    } else {
+      startCity();
+    }
+    if (wasMusic && !timer) {
+      nextStep = ctx.currentTime + 0.05;
+      timer = setInterval(tick, 40);
     }
   }
 
@@ -283,7 +397,9 @@ export function createAudio() {
     musicOn = !!on;
     if (!ctx) return;
     if (on) {
-      startCity();
+      // Follows the current scene, so turning music on while in the lobby
+      // plays lobby tempo and turning it on in overtime plays the fast one.
+      if (scene === 'lobby') stopCity(); else startCity();
       if (!timer) {
         nextStep = ctx.currentTime + 0.05;
         timer = setInterval(tick, 40);
@@ -306,9 +422,11 @@ export function createAudio() {
   return {
     unlock,
     play,
+    setScene,
     setMusic,
     setMuted,
     get ready() { return !!ctx; },
     get muted() { return muted; },
+    get scene() { return scene; },
   };
 }

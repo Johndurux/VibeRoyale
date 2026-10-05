@@ -2,16 +2,20 @@
 // Boot. Wires the modules together and starts the render loop. Deliberately
 // thin: the game rules live in the modules, not here.
 
-import { renderer, scene, camera, CAM_ORIGIN } from './scene.js';
+import { renderer, scene, camera, CAM_ORIGIN, updateSky, setSkyMood, resetSky } from './scene.js';
 import { buildArena } from './arena.js';
-import { buildTowers, damageTower, setHitListener } from './towers.js';
+import { buildTowers, damageTower, setHitListener, setWreckListener } from './towers.js';
+import { createMatch } from './match.js';
+import { buildSpells } from './spells.js';
+import { createVfx } from './vfx.js';
+import * as progression from './progression.js';
 import { buildTroops, passable } from './troops.js';
 import { CHARACTERS } from './characters.js';
 import { createUI } from './ui.js';
 import { createAudio } from './audio.js';
 import { createBot } from './bot.js';
 import { createLobby } from './lobby.js';
-import { ARENA, TOWERS, PALETTE, CARDS } from './config.js';
+import { ARENA, TOWERS, PALETTE, CARDS, SPELLS, FEATURES } from './config.js';
 import { neonBox } from './voxel.js';
 import * as THREE from 'three';
 
@@ -19,9 +23,61 @@ import * as THREE from 'three';
 // the first frame back from a multi-second delta.
 const MAX_DT = 0.05;
 
+// -- camera shake ------------------------------------------------------------
+// Decaying, seeded from the clock rather than random, so it is smooth at any
+// frame rate and reproducible when a probe wants a screenshot of the peak.
+let shakeAmp = 0;
+let shakeT = 0;
+let shakeDur = 0.001;
+let camHome = null;
+
+/**
+ * Kick the camera. A new kick replaces an in-flight one rather than adding to
+ * it, so a double KO does not launch the camera into orbit.
+ * @param {number} amp world units at full strength
+ * @param {number} dur seconds to decay to zero
+ */
+function shake(amp, dur) {
+  shakeAmp = Math.max(shakeAmp, amp);
+  shakeT = 0;
+  shakeDur = Math.max(dur, 0.001);
+}
+
+/**
+ * Apply the shake offset to the camera, on top of its home position.
+ * @param {number} dt
+ */
+function updateShake(dt) {
+  if (!camHome) {
+    camHome = { x: camera.position.x, y: camera.position.y, z: camera.position.z };
+  }
+  if (shakeAmp > 0.0005) {
+    shakeT += dt;
+    const k = Math.max(0, 1 - shakeT / shakeDur);
+    // Square the falloff: a linear decay spends most of its time barely moving
+    // and then stops, which reads as a jolt that never quite arrived.
+    const a = shakeAmp * k * k;
+    // Two incommensurate frequencies, so the motion never visibly repeats.
+    camera.position.x = camHome.x + Math.sin(shakeT * 61) * a;
+    camera.position.y = camHome.y + Math.sin(shakeT * 47) * a * 0.8;
+    camera.position.z = camHome.z + Math.sin(shakeT * 73) * a * 0.35;
+    if (k <= 0) shakeAmp = 0;
+  } else {
+    camera.position.set(camHome.x, camHome.y, camHome.z);
+    camera.lookAt(CAM_ORIGIN.lookX, CAM_ORIGIN.lookY, CAM_ORIGIN.lookZ);
+  }
+}
+
 const arena = buildArena();
 const towerKit = buildTowers();
 scene.add(arena.root, towerKit.root);
+
+// Effects share the one scene graph. They are updated every frame whether or
+// not the match is live, so a collapse still finishes animating after the
+// result screen comes up - a tower that stops mid-fall because the match
+// ended is the game losing track of its own state.
+const vfx = createVfx();
+scene.add(vfx.root);
 
 // -- audio ------------------------------------------------------------------
 // Nothing is audible until the first real gesture, because a browser will not
@@ -44,6 +100,25 @@ window.addEventListener('keydown', unlockAudio, { passive: true });
 // player cannot click through.
 let matchLive = false;
 
+// -- match bookkeeping ----------------------------------------------------------
+// Per-match counters, reset in startMatch so a second match on the same page
+// starts from zero. Leaving them accumulating is how the result screen ends up
+// showing the sum of three matches.
+//
+// Declared here, above the HUD, and not down with the other bookkeeping: the
+// HUD's onResult hook can reach endMatch(), and endMatch() reads all of these.
+// A `let` below this point would still be in its temporal dead zone during the
+// first paint, so the very first result of a match would throw a
+// ReferenceError instead of ending the match.
+let damageDealtThisMatch = 0;
+let spellsCastThisMatch = 0;
+let elixirSpentThisMatch = 0;
+// The single settlement guard. A king falling and the clock running out both
+// route through matchClock.settle(), but endMatch() is also reachable from the
+// HUD, so the gate lives at the one function that closes the match.
+let settled = false;
+let lastResult = null;
+
 // Mounted after the towers exist: the HUD binds to towerKit.towers, so it has
 // to be created once there is real HP to read. The two callbacks are how the
 // HUD reports a card being armed and a match being decided without owning an
@@ -52,21 +127,77 @@ const ui = createUI({
   towerKit,
   camera,
   onCardPick: () => audio.play('card'),
-  onResult: (won) => {
-    matchLive = false;
-    bot.stop();
-    audio.setMusic(false);
-    audio.play(won ? 'victory' : 'defeat');
+  onResult: () => {
+    // The UI reporting that it drew its panel. Settlement has already happened
+    // in endMatch(); this is here only so the HUD can say so without owning
+    // match state. Deliberately does not stop the bot or play a cue.
   },
 });
 
 // Every tower hit raises a damage number at the tower that took it, and says
 // so out loud. A king hit gets its own heavier cue - it is the sound of the
 // one tower whose loss ends the match.
+if (FEATURES.towerShatter) {
+  setWreckListener((tower) => {
+    vfx.rubble(tower.x, tower.z, PALETTE.stone);
+    if (FEATURES.screenShake) {
+      // A king is taller and its fall is the end of the match, so it hits
+      // harder and longer. Scaled by kind rather than by a flat number so the
+      // two do not read as the same event.
+      const big = tower.kind === 'king';
+      shake(big ? 0.85 : 0.4, big ? 0.75 : 0.45);
+    }
+  });
+}
+
 setHitListener((tower, amount, ko) => {
   ui.popDamage(tower, amount, ko);
-  if (ko) audio.play('ko');
-  else audio.play(tower.kind === 'king' ? 'king' : 'towerHit');
+  if (tower.side === 'enemy') damageDealtThisMatch += amount;
+  if (vfx && vfx.hitSparks) {
+    vfx.hitSparks(tower.x, 2.6, tower.z, 0xffbb33);
+  }
+  if (FEATURES.screenShake && !ko && tower.kind === 'king') {
+    shake(0.12, 0.15);
+  }
+  if (ko) {
+    audio.play('ko');
+    if (tower.kind === 'king') {
+      // The one thing that ends a match before the clock does. Routed through
+      // matchClock so the knockout and the timeout share one guard, and so a
+      // king that falls in overtime is recorded as an overtime result.
+      matchClock.settle(tower.side === 'player' ? 'enemy' : 'player', 'king');
+    }
+  } else {
+    audio.play(tower.kind === 'king' ? 'king' : 'towerHit');
+  }
+});
+
+// -- the clock --------------------------------------------------------------
+// Tracks regulation, overtime and sudden death. start() is called from
+// startMatch(); stop() parks it when the result screen is up.
+const matchClock = createMatch({
+  towers: towerKit.towers,
+  onTick: (info) => {
+    // The HUD reads the clock every frame, so this is a cheap push of two
+    // numbers. Phase is passed because the timer pill changes colour and
+    // gains the OT badge, and it has to be told rather than guess.
+    //
+    // Guarded because the timer pill is the UI pass's markup. Until it
+    // exists the clock still runs and overtime still fires; it just is not
+    // drawn yet.
+    if (ui.setTimer) ui.setTimer(info.seconds, info.phase);
+  },
+  onOvertime: () => {
+    if (FEATURES.dynamicSky) setSkyMood('storm');
+    if (FEATURES.lobbyMusic) audio.setScene('overtime');
+    audio.play('overtime');
+    if (FEATURES.haptics) buzz([30, 40, 30]);
+    if (ui.flashOvertime) ui.flashOvertime();
+  },
+  onEnd: (result) => {
+    // Reached only through settle(), so no double-fire is possible here.
+    endMatch(result);
+  },
 });
 
 // Troops come after the UI, because a troop landing a hit needs popDamageAt()
@@ -74,24 +205,33 @@ setHitListener((tower, amount, ko) => {
 // tower for the tower listener to hang off.
 const troops = buildTroops({
   towers: towerKit.towers,
+  vfx,
+  audio,
   onHit: (troop, amount) => {
     ui.popDamageAt(troop.x, 2.8, troop.z, amount, false);
     audio.play('hit');
   },
+  onTowerHit: (troop, tower) => {
+    if (FEATURES.screenShake && troop.card && troop.card.id === 'armor') {
+      shake(0.08, 0.12);
+    }
+  },
 });
 scene.add(troops.root);
 
-// -- the rival --------------------------------------------------------------
-// Built now, armed later. The bot shares troops.js and the same 28-slot
-// capacity the player is spending, so it is on exactly the same rules.
-const bot = createBot({
-  troops,
-  towers: towerKit.towers,
-  difficulty: 'normal',
-  // The rival's plays are audible so the player can read a counter from sound
-  // alone when the far bank is off screen.
-  onDeploy: () => audio.play('enemyPlace'),
-});
+// -- haptics ---------------------------------------------------------------------
+/**
+ * Buzz, if this device has a vibrator. No-op everywhere else.
+ * @param {number|number[]} pattern
+ */
+function buzz(pattern) {
+  if (!FEATURES.haptics) return;
+  try {
+    if (navigator.vibrate) navigator.vibrate(pattern);
+  } catch (e) {
+    // Unsupported here. Nothing to report.
+  }
+}
 
 // -- placement --------------------------------------------------------------
 // A card is played in two moves: click the card, then click the field. This
@@ -150,6 +290,62 @@ function legal(p) {
   return true;
 }
 
+/**
+ * May a spell card be dropped here?
+ * Allows deployment across the entire arena footprint including enemy side and rivers.
+ * @param {{x: number, z: number}|null} p
+ * @returns {boolean}
+ */
+function legalSpell(p) {
+  if (!p) return false;
+  return Math.abs(p.x) <= DEPLOY_EDGE && Math.abs(p.z) <= DEPLOY_FAR_Z;
+}
+
+/**
+ * Check legality based on card type (troop vs spell).
+ * @param {string|null} cardId
+ * @param {{x: number, z: number}|null} p
+ * @returns {boolean}
+ */
+function legalForCard(cardId, p) {
+  if (!p) return false;
+  const card = CHARACTERS.find((c) => c.id === cardId);
+  return (card && card.spell) ? legalSpell(p) : legal(p);
+}
+
+// -- spells ----------------------------------------------------------------------
+const spells = buildSpells({
+  towers: towerKit.towers,
+  troops,
+  vfx,
+  onCast: (kind) => {
+    audio.play('spell');
+    if (FEATURES.haptics) buzz(kind === 'blast' ? 22 : 10);
+  },
+  onImpact: (kind, x, z) => {
+    if (FEATURES.screenShake && kind === 'blast') shake(0.18, 0.22);
+    if (kind === 'blast') audio.play('towerHit');
+  },
+  onHit: (target, amount) => {
+    // Raised through the same damage-number path as a melee hit, so a tower
+    // that dies to a fireball prints KO exactly like one finished by troops.
+    ui.popDamage(target, amount, false);
+  },
+});
+
+// -- the rival --------------------------------------------------------------
+// Built now, armed later. The bot shares troops.js and the same 28-slot
+// capacity the player is spending, so it is on exactly the same rules.
+const bot = createBot({
+  troops,
+  towers: towerKit.towers,
+  spells,
+  difficulty: 'normal',
+  // The rival's plays are audible so the player can read a counter from sound
+  // alone when the far bank is off screen.
+  onDeploy: () => audio.play('enemyPlace'),
+});
+
 // -- the ghost ring ---------------------------------------------------------
 // Two rings, built once, and the illegal one is simply made visible. Not
 // because it is tidy: voxel.js hands out shared cached materials, so recolouring
@@ -193,7 +389,7 @@ function refreshGhost() {
   ghost.visible = true;
   ghost.position.x = hover.x;
   ghost.position.z = hover.z;
-  const ok = legal(hover);
+  const ok = legalForCard(ui.selected, hover);
   ghostOk.visible = ok;
   ghostNo.visible = !ok;
 }
@@ -225,32 +421,63 @@ function deploy(clientX, clientY) {
     return;
   }
 
+  const card = CHARACTERS.find((c) => c.id === id);
   const p = groundAt(clientX, clientY);
-  if (!legal(p)) {
+  const isAllowed = card && card.spell ? legalSpell(p) : legal(p);
+  if (!isAllowed) {
     ui.flashHint('CANNOT DEPLOY THERE');
     audio.play('deny');
+    return;
+  }
+
+  // A spell card has no unit to spawn, so the troop path is skipped entirely
+  // rather than half-run. Dispatching on the card's own `spell` field keeps
+  // characters.js the single source of truth for what a card is.
+  //
+  // This branch runs BEFORE the capacity check on purpose. Capacity counts
+  // live troops and casting a spell adds none, so a field already at the cap
+  // must still be able to throw a fireball. Otherwise the player is holding
+  // the card, has the elixir, taps a legal spot, and nothing happens.
+  if (card.spell) {
+    const res = spells.cast(card.spell, p.x, p.z, 'player');
+    if (!res) {
+      ui.flashHint('SPELL UNAVAILABLE');
+      audio.play('deny');
+      return;
+    }
+    // Charged here, after the cast resolved, so a spell that could not
+    // resolve never costs anything. The shared spend further down sits behind
+    // the troop capacity gate, which a spell must not be subject to.
+    if (!ui.spend(ui.costOf(id))) {
+      ui.flashHint('NOT ENOUGH ELIXIR');
+      audio.play('deny');
+      return;
+    }
+    spellsCastThisMatch++;
+    elixirSpentThisMatch += ui.costOf(id);
+    audio.play('place');
+    ui.select(null);
+    ghost.visible = false;
     return;
   }
 
   // Capacity is checked BEFORE the spend, so elixir is only ever taken for a
   // placement that is definitely going to happen.
   let live = 0;
-  for (const t of troops.troops) if (!t.dead) live++;
+  for (const tr of troops.troops) if (!tr.dead) live++;
   if (live >= troops.MAX_TROOPS) {
     ui.flashHint('FIELD IS FULL');
     audio.play('deny');
     return;
   }
 
-  // spend() is the same gate the old keydown demo used, and it is still the
-  // only thing in the game that can lower the bar.
+  // spend() is the only thing in the game that can lower the bar.
   if (!ui.spend(ui.costOf(id))) {
     ui.flashHint('NOT ENOUGH ELIXIR');
     audio.play('deny');
     return;
   }
 
-  const card = CHARACTERS.find((c) => c.id === id);
   const t = troops.spawn(card, p.x, p.z, 'player');
   if (!t) {
     // Unreachable given the checks above, so it is reported rather than
@@ -263,6 +490,7 @@ function deploy(clientX, clientY) {
   }
   // The two sounds of a card actually arriving: the drop and the body popping
   // in. Spawn is separate so the same cue is reusable by the bot.
+  if (FEATURES.deployVfx) vfx.deployBurst(p.x, p.z, 'player');
   audio.play('place');
   audio.play('spawn');
   // The card is spent, so it is no longer armed.
@@ -307,15 +535,33 @@ let contextLost = false;
 const notice = document.getElementById('contextLost');
 const showNotice = (on) => { if (notice) notice.style.display = on ? 'flex' : 'none'; };
 
+let ctxTimer = null;
+
 renderer.domElement.addEventListener('webglcontextlost', (e) => {
   e.preventDefault();
   contextLost = true;
   showNotice(true);
+  
+  if (ctxTimer) clearTimeout(ctxTimer);
+  ctxTimer = setTimeout(() => {
+    if (contextLost && notice) {
+      const title = notice.querySelector('.ctx-title');
+      if (title) title.textContent = 'GPU DISCONNECTED';
+      const body = notice.querySelector('.ctx-body');
+      if (body) body.innerHTML = 'Graphics context could not be restored automatically.<br><br><button onclick="location.reload()" style="margin-top:15px; padding:10px 24px; font-family:var(--font-num); font-size:16px; cursor:pointer; background:#2A6A14; color:#FFF3CE; border:3px solid #14100C; border-radius:8px;">RELOAD PAGE</button>';
+    }
+  }, 5000);
 }, false);
 
 renderer.domElement.addEventListener('webglcontextrestored', () => {
   contextLost = false;
+  if (ctxTimer) clearTimeout(ctxTimer);
   showNotice(false);
+  
+  const title = notice?.querySelector('.ctx-title');
+  if (title) title.textContent = 'RECONNECTING GPU';
+  const body = notice?.querySelector('.ctx-body');
+  if (body) body.textContent = 'Graphics context lost. Execution resumes automatically.';
 }, false);
 
 // -- loop --------------------------------------------------------------------
@@ -326,15 +572,34 @@ function animate() {
   if (contextLost) return;
   const dt = Math.min(clock.getDelta(), MAX_DT);
   arena.update(dt);
-  towerKit.update(dt);
   // The board breathes from the first frame (crowd, foam, torn banners), but
   // nothing that costs elixir or spends a troop tick until the lobby hands
   // the match over. This is the single gate; there is no second one to forget.
   if (matchLive) {
+    matchClock.update(dt);
     bot.update(dt);
     troops.update(dt);
     ui.update(dt);
+    const selCard = ui.selected ? CHARACTERS.find((c) => c.id === ui.selected) : null;
+    vfx.setDeployZone(!!(selCard && !selCard.spell));
+  } else {
+    vfx.setDeployZone(false);
   }
+
+  // Outside the gate on purpose - see above.
+  towerKit.update(dt, matchLive ? {
+    troops,
+    vfx,
+    audio,
+    onHit: (t, amount) => {
+      ui.popDamageAt(t.x, 2.8, t.z, amount, false);
+      audio.play('hit');
+    },
+  } : null);
+  vfx.update(dt);
+  updateShake(dt);
+  if (FEATURES.dynamicSky) updateSky(dt);
+
   renderer.render(scene, camera);
 }
 
@@ -348,10 +613,125 @@ window.addEventListener('resize', () => {
 // The pre-match screen resolves the two things a match needs up front: the
 // four cards the player is fighting with, and how hard the rival pushes back.
 // onStart runs after the countdown and is the only place matchLive turns true.
+// The counters themselves are declared next to the HUD, because the HUD's
+// onResult hook can reach endMatch() and endMatch() reads them.
+
+function towersLostToPlayer() {
+  return towerKit.towers.filter((t) => t.side === 'enemy' && t.destroyed).length;
+}
+
+/**
+ * Close the match out: stop the sim, bank the career numbers, show the result.
+ *
+ * Progression is recorded here and nowhere else, so a match abandoned by
+ * closing the tab mid-play banks nothing - which is the intended reading of
+ * "XP for a match you finished".
+ *
+ * @param {{winner:'player'|'enemy'|'draw', reason:string, overtime:boolean}} result
+ */
+function endMatch(result) {
+  if (settled) return;
+  settled = true;
+  lastResult = result;
+  matchLive = false;
+  matchClock.stop();
+  bot.stop();
+  audio.setMusic(false);
+  if (FEATURES.dynamicSky) resetSky();
+
+  const won = result.winner === 'player';
+  // recordMatch returns what the match was worth: the XP total, the level it
+  // landed on, the streak tier and the cards it opened. It is booked exactly
+  // once, here, and only on a match that actually reached a result.
+  const banked = progression.recordMatch({
+    won,
+    difficulty: bot.difficulty,
+    towersDestroyed: towersLostToPlayer(),
+    damageDealt: damageDealtThisMatch,
+  });
+  const after = progression.snapshot();
+
+  audio.play(won ? 'victory' : 'defeat');
+  if (FEATURES.haptics) buzz(won ? [40, 60, 80] : [80, 60, 40]);
+
+  // The stat block is assembled here and stashed on the result object. The rich
+  // panel is the UI pass's job; until it exists, the numbers are still real and
+  // reachable from the test surface, so the sim half of this feature is not
+  // sitting on a placeholder.
+  lastResult = {
+    ...result,
+    duration: matchClock.elapsed,
+    progress: after,
+    // Taken from the booking rather than recomputed: newlyUnlocked() wants
+    // level numbers, not the snapshots they came from, and passing the
+    // snapshots silently produced an empty list every single match.
+    unlocked: banked.unlocked,
+    // What the match earned, not what the career totals to. The panel shows
+    // "this game" and "career" as separate lines, and these are the first.
+    xp: banked.total,
+    xpBreakdown: {
+      base: banked.base,
+      towers: banked.towerBonus,
+      streak: banked.streakBonus,
+    },
+    tier: banked.tier,
+    leveledUp: banked.leveledUp,
+    stats: {
+      towersDestroyed: towersLostToPlayer(),
+      damageDealt: Math.round(damageDealtThisMatch),
+      elixirSpent: elixirSpentThisMatch,
+      spellsCast: spellsCastThisMatch,
+    },
+    // Both buttons resolve here, on the payload, so the result screen never
+    // has to know how a match is rebuilt. PLAY AGAIN reuses the deck the
+    // player just won or lost with; CHANGE DECK hands control back to the
+    // lobby, which is the only place a deck can be edited.
+    onPlayAgain: () => startMatch(bot.difficulty, ui.deck || lobby.deck),
+    onChangeDeck: () => {
+      // The match is already stopped by the time this runs, so all that is
+      // left is to put the player back in front of the deck picker. The board
+      // stays on its final state behind the lobby rather than being rebuilt -
+      // the result screen is the last thing they should have to look at.
+      if (ui.reset) ui.reset();
+      audio.setMusic(false);
+      lobby.show();
+    },
+  };
+
+  // showResultPanel is added by the UI pass. Guarded so the sim half lands and
+  // runs on its own; the old two-argument call keeps the existing ribbon.
+  if (ui.showResultPanel) ui.showResultPanel(lastResult);
+  else if (ui.showResult) ui.showResult(won, result.reason);
+}
+
 function startMatch(difficulty, deck) {
+  // Every per-match counter and every animation resets here, not in the UI
+  // constructor. This is the whole reason play-again works without a reload.
+  damageDealtThisMatch = 0;
+  spellsCastThisMatch = 0;
+  elixirSpentThisMatch = 0;
+  settled = false;
+  lastResult = null;
+  camHome = null;
+  shakeAmp = 0;
+
   ui.setDeck(deck);
+  // The HUD's own per-match state - the selected card, the elixir-leak timer,
+  // any result overlay - is cleared here rather than reloaded, so a second
+  // match starts from the same state the first one did.
+  if (ui.reset) ui.reset();
   bot.setDifficulty(difficulty);
   bot.start();
+  // Order matters: the board is rebuilt and the clock armed before the loop is
+  // allowed to run, so the first live frame already sees a consistent world.
+  towerKit.reset();
+  troops.clear();
+  matchClock.start();
+  if (FEATURES.dynamicSky) setSkyMood('day');
+  if (FEATURES.lobbyMusic) {
+    audio.setScene('battle');
+    audio.setMusic(true);
+  }
   matchLive = true;
 }
 
@@ -364,7 +744,13 @@ const lobby = createLobby({ audio, onStart: startMatch });
 // that. ?probe=1 replays that assumption: it skips the lobby and starts a
 // normal match immediately with the full roster, so an audit can keep driving
 // the page without learning what a lobby is. Human-loaded pages never see it.
-if (new URLSearchParams(location.search).get('probe') === '1') {
+// Dev-only. Set to true in a dev build; a shipped build leaves it false and
+// the probe flags below become inert, so the harnesses keep working against a
+// dev build without leaving a bypass in production.
+const DEV = true;
+const qs = new URLSearchParams(location.search);
+
+if (DEV && qs.get('probe') === '1') {
   lobby.hide();
   startMatch('normal', CHARACTERS.filter((c) => c.unlocked !== false).map((c) => c.id));
 }
@@ -380,6 +766,7 @@ try {
     __arena: { arena },
     __towers: towerKit,
     __troops: troops,
+    __passable: passable,
     __characters: { CHARACTERS, CAM_ORIGIN },
     __cards: CARDS,
     __ghost: { ghost, ok: ghostOk, no: ghostNo },
@@ -390,12 +777,21 @@ try {
     __deploy: deploy,
     __groundAt: groundAt,
     __legal: legal,
+    __legalSpell: legalSpell,
+    __legalForCard: legalForCard,
     // The phase-2 additions: sound, the rival, the lobby and the live gate, so
     // a probe can assert the match is frozen pre-start and armed after it.
     __audio: audio,
     __bot: bot,
     __lobby: lobby,
+    __match: matchClock,
+    __spells: spells,
+    __vfx: vfx,
+    __progress: progression,
+    __shake: shake,
     get __matchLive() { return matchLive; },
+    get __settled() { return settled; },
+    get __result() { return lastResult; },
   };
 } catch (e) {
   window.__vrScopeError = String(e);
@@ -408,7 +804,7 @@ try {
 //   Order is [king, small-left, small-right] - three per side, so this plan
 //   targets all three. A previous version asked for a 4th tower that does not
 //   exist, so the KO step silently did nothing and the shot showed no wreck.
-if (new URLSearchParams(location.search).get('state') === 'damaged') {
+if (DEV && qs.get('state') === 'damaged') {
   const enemy = towerKit.towers.filter((t) => t.side === 'enemy');
   const plan = [
     { pick: 0, amount: 0.45, hold: false },   // king  -> 55% amber

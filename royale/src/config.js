@@ -42,12 +42,146 @@ export const CARDS = {
   lavender: { cost: 2, hp: 300,  dps: 80,  range: 2.4, speed: 3.0, hitEvery: 0.6 },
   pip:      { cost: 2, hp: 260,  dps: 85,  range: 1.3, speed: 3.6, hitEvery: 0.5 },
   mrhat:    { cost: 2, hp: 340,  dps: 75,  range: 1.4, speed: 3.1, hitEvery: 0.6 },
+  // Spells. They are priced here and nowhere else, because the HUD reads the
+  // same table to print the cost and refuse a purchase the player cannot
+  // afford. They carry no hp/dps/range/speed, and that is the marker
+  // troops.js and the bot both test for rather than a separate roster flag:
+  // a spell that somehow reached spawn() would produce a zero-HP unit that
+  // dies on the first tick, so spawn() refuses these outright.
+  fireball: { cost: 4, spell: 'fireball' },
+  freeze:   { cost: 3, spell: 'freeze' },
+  heal:     { cost: 3, spell: 'heal' },
+};
+
+// ── spells ────────────────────────────────────────────────────────────────
+// What each spell actually does, separated from its price above. `kind` is the
+// branch spells.js takes; the rest of the fields are that branch's arguments.
+// `amount` on heal is a FRACTION of max HP rather than flat damage: a heal
+// that restored a flat number would be a full repair on a 2-cost and a
+// rounding error on a tank, which is exactly backwards.
+export const SPELLS = {
+  fireball: { kind: 'blast',   radius: 2.5, amount: 340, color: 0xff7a2f, label: 'BLAST' },
+  freeze:   { kind: 'freeze',  radius: 3.0, duration: 2.5, color: 0x8fe8ff, label: 'FROZEN' },
+  heal:     { kind: 'heal',    radius: 3.0, amount: 0.45, color: 0x8bef5a, label: 'MENDED' },
+};
+
+// ── deployment ────────────────────────────────────────────────────────────
+// The legal band for a card, shared by main.js (the player), bot.js (the
+// rival) and vfx.js (the touch deployment overlay). These three used to hold
+// private copies of the same four numbers, which is a bug waiting to happen:
+// if the band ever moved, the rival would be dropping units somewhere a
+// human could not. One table, three readers.
+export const DEPLOY = {
+  nearZ: 1.2,                       // past the bridge onto your own half
+  farZ: ARENA.halfLength - 1.2,     // off the back line, behind the king
+  edge: ARENA.halfWidth - 1.0,
+  kingClearance: 3.4,               // a building is not a spawn point
+  // Ring the ghost draws under the cursor. Fingers are coarser than a mouse
+  // cursor, so touch gets a wider target for the same underlying spot.
+  ghostRadius: 1.5,
+  ghostRadiusTouch: 2.5,
+};
+
+// ── elixir ────────────────────────────────────────────────────────────────
+// One definition of the economy, previously copied into ui.js and bot.js. The
+// bot's fairness rests entirely on it running at the player's exact rate, so
+// the number it used to keep to itself is now the same number.
+export const ELIXIR = {
+  max: 10,
+  period: 2.8,     // seconds per drop
+  start: 5,        // both sides open on half a bar
+  // A full bar that stays full is elixir being wasted. Three seconds is long
+  // enough that a player mid-decision is never nagged, and short enough that
+  // idling through a full bar does not go unnoticed.
+  leakAfter: 3,
+};
+
+// ── match clock ───────────────────────────────────────────────────────────
+export const MATCH = {
+  regular: 180,      // 3:00 of regulation
+  overtime: 60,      // then a minute of double elixir
+  // Sudden death is decided on total tower HP percentage, the same number the
+  // HUD already prints as each side's total, so the winner on the result
+  // screen is the winner on the side banners.
+  elixirMult: 2,
+  onFireRegenMult: 1.1,
+};
+
+// ── progression ───────────────────────────────────────────────────────────
+// Career numbers. XP for a win is per difficulty rather than a single award,
+// because beating the MARSHAL is the thing worth chasing; losing is still
+// worth something so a bad run is never a dead end.
+export const PROGRESS = {
+  storageKey: 'vr_progress',
+  tutorialKey: 'vr_tutorial_seen',
+  winXp: { easy: 50, normal: 100, hard: 200 },
+  lossXp: 25,
+  towerXp: 30,       // per enemy tower destroyed
+  // Streak tiers, checked from the top down. A 5-win run is also a 3-win run,
+  // so testing the XP branch first would quietly hand every ON FIRE match
+  // the smaller bonus instead of the bigger one.
+  hotStreakAt: 3,
+  hotStreakXpMult: 1.5,
+  onFireAt: 5,
+  onFireRegenMult: MATCH.onFireRegenMult,
+  // Each level asks 20% more XP than the last. 100 is the first threshold
+  // and 1.2 is the stated growth; the two together are the only definition
+  // of "level N costs", so nothing has to hardcode a level total.
+  firstLevelXp: 100,
+  levelGrowth: 1.2,
+};
+
+// ── unlocks ───────────────────────────────────────────────────────────────
+// Five cards to start, the remaining seven across levels 2-8. The order is
+// cheapest-and-most-basic first, so an early level-up widens a hand that can
+// already fight rather than handing over a card the player has no answer for.
+export const UNLOCKS = {
+  free: 5,
+  ladder: [2, 3, 4, 5, 6, 7, 8],
+};
+
+// ── feature flags ─────────────────────────────────────────────────────────
+// Every subsystem added after the arena can be switched off here without
+// touching game logic. A flag is read at the one place a feature is wired in,
+// so turning one off removes its behaviour rather than hiding it behind a
+// guard that can still be reached by a direct call.
+export const FEATURES = {
+  matchTimer: true,
+  overtime: true,
+  tutorial: true,
+  longPressTips: true,
+  progression: true,
+  spells: true,
+  targeting: true,
+  elixirLeak: true,
+  deployVfx: true,
+  towerShatter: true,
+  screenShake: true,
+  dynamicSky: true,
+  lobbyMusic: true,
+  deployZone: true,
+  haptics: true,
 };
 
 // ── towers ────────────────────────────────────────────────────────────────
 export const TOWERS = {
+  // The three-step death timeline, in seconds. Tuned against the tower's own
+  // scale: a small tower is 3.5 units tall and a king is 5.4, so a fixed
+  // duration reads as different speeds on the two. The shake scales with
+  // height for exactly that reason - see towers.js.
+  deathShake: 0.45,    // 1. the tower shudders, still standing, still lit
+  deathShatter: 0.3,   // 2. the crown and roof blow off, rubble flies
+  deathWreck: 0.9,     // 3. the stump sinks and tips over, and stays there
+
   smallMaxHp: 500,
   kingMaxHp: 1000,
+  // Tower defense attributes
+  smallRange: 7.5,
+  smallFireRate: 0.9,
+  smallDamage: 42,
+  kingRange: 7.0,
+  kingFireRate: 1.0,
+  kingDamage: 55,
   // Side positions, per side ('player' = +Z, 'enemy' = -Z).
   // King sits centre-back; the two ATM towers guard the side lanes forward.
   king: { x: 0, z: 13.2 },
