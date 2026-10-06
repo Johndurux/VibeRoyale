@@ -14,7 +14,8 @@ import { CHARACTERS } from './characters.js';
 import { createUI } from './ui.js';
 import { createAudio } from './audio.js';
 import { createBot } from './bot.js';
-import { createLobby } from './lobby.js';
+import { createLobby, DECK_KEY } from './lobby.js';
+import { createMenu } from './menu.js';
 import { ARENA, TOWERS, PALETTE, CARDS, SPELLS, FEATURES, STAGES } from './config.js';
 import { neonBox } from './voxel.js';
 import * as THREE from 'three';
@@ -116,6 +117,10 @@ let elixirSpentThisMatch = 0;
 // The stage currently being played, set by startMatch from the STAGES table.
 // endMatch books progression against it and PLAY AGAIN replays it.
 let currentStage = 1;
+// True while a QUICK BATTLE from the main menu is running: the fight is real
+// (the rival uses a stage's knobs) but the campaign is not booked - a quick
+// win banks match XP and streak, never a stage clear.
+let casual = false;
 // The single settlement guard. A king falling and the clock running out both
 // route through matchClock.settle(), but endMatch() is also reachable from the
 // HUD, so the gate lives at the one function that closes the match.
@@ -649,7 +654,10 @@ function endMatch(result) {
   // It is booked exactly once, here, and only on a match that reached a result.
   const banked = progression.recordMatch({
     won,
-    stage: currentStage,
+    // A casual match books against stage 0: STAGES has no row there, so the
+    // clear and its bonus are structurally unreachable while wins, streaks
+    // and match XP still bank. Practice pays; it cannot advance the campaign.
+    stage: casual ? 0 : currentStage,
     difficulty: bot.difficulty,
     towersDestroyed: towersLostToPlayer(),
     damageDealt: damageDealtThisMatch,
@@ -665,7 +673,9 @@ function endMatch(result) {
   // sitting on a placeholder.
   lastResult = {
     ...result,
-    stage: currentStage,
+    // A casual result carries no stage number, so the ribbon reads the plain
+    // "rival king tower down" line instead of claiming a stage clear.
+    stage: casual ? null : currentStage,
     stageCleared: banked.stageCleared,
     duration: matchClock.elapsed,
     progress: after,
@@ -696,8 +706,8 @@ function endMatch(result) {
     // AGAIN replays this stage (a failed stage is a retry, stage 15 is the
     // end of the line); CHANGE DECK hands control back to the lobby, which is
     // the only place a deck can be edited.
-    onPlayAgain: () => startMatch(currentStage, ui.deck || lobby.deck),
-    onNextStage: currentStage < STAGES.length
+    onPlayAgain: () => startMatch(currentStage, ui.deck || lobby.deck, { casual }),
+    onNextStage: !casual && currentStage < STAGES.length
       ? () => startMatch(currentStage + 1, ui.deck || lobby.deck)
       : null,
     onChangeDeck: () => {
@@ -738,7 +748,13 @@ function quitToLobby() {
   lobby.show();
 }
 
-function startMatch(stage, deck) {
+/**
+ * @param {number} stage 1-based row of the STAGES table
+ * @param {string[]} deck the four cards to fight with
+ * @param {{casual?: boolean}} [opts] casual = a QUICK BATTLE: no stage badge,
+ *   no campaign booking, no NEXT STAGE offer
+ */
+function startMatch(stage, deck, opts = {}) {
   // Every per-match counter and every animation resets here, not in the UI
   // constructor. This is the whole reason play-again works without a reload.
   damageDealtThisMatch = 0;
@@ -746,6 +762,7 @@ function startMatch(stage, deck) {
   elixirSpentThisMatch = 0;
   settled = false;
   lastResult = null;
+  casual = !!opts.casual;
   camHome = null;
   shakeAmp = 0;
 
@@ -760,7 +777,8 @@ function startMatch(stage, deck) {
   // any result overlay - is cleared here rather than reloaded, so a second
   // match starts from the same state the first one did.
   if (ui.reset) ui.reset();
-  ui.setStage(currentStage);
+  // The stage badge is a campaign claim; a quick battle wears none.
+  ui.setStage(casual ? 0 : currentStage);
   // One call arms the whole rival: behaviour knobs, elixir income, and the
   // hand mirror for this stage.
   bot.setStage(cfg);
@@ -782,7 +800,43 @@ function startMatch(stage, deck) {
   matchLive = true;
 }
 
-const lobby = createLobby({ audio, onStart: startMatch });
+const lobby = createLobby({
+  audio,
+  onStart: startMatch,
+  // The lobby's MENU button steps back out to the front door.
+  onMenu: () => menu.show(),
+});
+
+const menu = createMenu({
+  audio,
+  onContinue: () => {
+    menu.hide();
+    lobby.show();
+  },
+  onQuick: () => {
+    // A quick battle spars against the next uncleared stage's rival: real
+    // resistance, but flagged casual so nothing books as a stage clear.
+    menu.hide();
+    startMatch(Math.min(1 + progression.snapshot().stage, STAGES.length), lobby.deck, { casual: true });
+  },
+  onNew: () => {
+    // The wipe is total: the career record and the saved deck both go, then
+    // the menu repaints to a virgin career. The lobby re-reads its deck on
+    // every show(), so the wipe lands without a page reload.
+    progression.reset();
+    try {
+      localStorage.removeItem(DECK_KEY);
+    } catch (e) {
+      // A blocked store has nothing to remove; the in-memory reset already
+      // happened.
+    }
+    menu.show();
+  },
+});
+
+// The front door. The lobby no longer self-presents on construction; a fresh
+// load lands on the menu.
+menu.show();
 
 // -- probe bypass -----------------------------------------------------------
 // The pre-match lobby exists for a human who needs a beat to choose a deck.
@@ -798,6 +852,7 @@ const DEV = true;
 const qs = new URLSearchParams(location.search);
 
 if (DEV && qs.get('probe') === '1') {
+  menu.hide();
   lobby.hide();
   startMatch(1, CHARACTERS.map((c) => c.id));
 }
@@ -880,6 +935,7 @@ if (DEV && qs.get('state') === 'damaged') {
   // is live and the loop is running HUD updates. The lobby would be in the way
   // of that frame, so a probe load starts the match immediately with the full
   // roster. No game code reads this flag - it is the screenshot harness.
+  menu.hide();
   lobby.hide();
   startMatch('normal', CHARACTERS.filter((c) => c.unlocked !== false).map((c) => c.id));
 }

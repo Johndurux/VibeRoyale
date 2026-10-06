@@ -24,7 +24,7 @@ const DECK_SIZE = 4;
 // lobby telling them the choice did not matter. It is stored under its own key
 // and re-validated against the unlock ladder on load, so a deck saved before a
 // reset cannot smuggle a now-locked card back in.
-const DECK_KEY = 'viberoyale.deck';
+export const DECK_KEY = 'viberoyale.deck';
 
 /**
  * Read the saved deck, keeping only ids that are playable right now.
@@ -77,8 +77,10 @@ const LEVELS = [
  *   button; a null audio disables the toggle rather than leaving it dead
  * @param {(difficulty: string, deck: string[]) => void} deps.onStart
  *   called once the countdown finishes
+ * @param {() => void} [deps.onMenu] called when the lobby's MENU button sends
+ *   the player back out to the main menu; absent leaves the button inert
  */
-export function createLobby({ audio, onStart }) {
+export function createLobby({ audio, onStart, onMenu }) {
   const root = document.getElementById('lobby');
   if (!root) return { hide() {}, show() {}, deck: [], stage: 1 };
 
@@ -92,12 +94,22 @@ export function createLobby({ audio, onStart }) {
   // A saved deck wins over the default hand, but only after loadDeck() has
   // checked every id against the ladder. Anything it rejects is simply absent,
   // and the fill below tops the hand back up to DECK_SIZE with unlocked cards.
-  let deck = loadDeck() || [];
-  for (const c of candidates) {
-    if (deck.length >= DECK_SIZE) break;
-    if (!deck.includes(c.id) && isUnlocked(c.id)) deck.push(c.id);
+  let deck = [];
+
+  /**
+   * Rebuild the hand from storage. Runs at boot and again on every show():
+   * a NEW GAME wipes the save underneath the lobby, and re-reading on entry
+   * is what makes that wipe real without a page reload.
+   */
+  function rebuildDeck() {
+    deck = loadDeck() || [];
+    for (const c of candidates) {
+      if (deck.length >= DECK_SIZE) break;
+      if (!deck.includes(c.id) && isUnlocked(c.id)) deck.push(c.id);
+    }
+    deck = deck.slice(0, DECK_SIZE);
   }
-  deck = deck.slice(0, DECK_SIZE);
+  rebuildDeck();
   // The level the career is sitting at. Read live rather than captured once,
   // because show() re-runs the card pass after a match may have banked a
   // level-up - a card that opened during that match has to lose its padlock
@@ -124,6 +136,21 @@ export function createLobby({ audio, onStart }) {
   const streakEl = document.getElementById('lvStreak');
   const streakNum = document.getElementById('lvStreakNum');
   const tierEl = document.getElementById('lvTier');
+  const menuBtn = document.getElementById('lobbyMenu');
+  const boardHost = document.getElementById('lobbyBoard');
+  // Tabs and their panes, matched by key. Both maps are allowed to be
+  // incomplete - every access below is guarded, so a partial DOM degrades to
+  // a lobby without tabs instead of a lobby that throws.
+  const tabs = {
+    stage: document.getElementById('ltabStage'),
+    deck: document.getElementById('ltabDeck'),
+    board: document.getElementById('ltabBoard'),
+  };
+  const panes = {
+    stage: document.getElementById('paneStage'),
+    deck: document.getElementById('paneDeck'),
+    board: document.getElementById('paneBoard'),
+  };
 
   /**
    * Paint the career strip from progression.snapshot(). The bar's width is the
@@ -146,6 +173,55 @@ export function createLobby({ audio, onStart }) {
     if (streakEl) {
       streakEl.classList.toggle('hot', s.tier === 'hot' || s.tier === 'onfire');
       streakEl.classList.toggle('onfire', s.tier === 'onfire');
+    }
+  }
+
+  // ── tabs: one screen, one job ────────────────────────────────────────────
+  /**
+   * Swap the visible pane. The career strip and the BATTLE button stay put;
+   * only the middle of the panel changes. The board is painted on entry, so
+   * it can never show numbers older than the moment its tab was opened.
+   * @param {'stage'|'deck'|'board'} name
+   */
+  function showTab(name) {
+    for (const key of Object.keys(panes)) {
+      if (panes[key]) panes[key].classList.toggle('on', key === name);
+      if (tabs[key]) tabs[key].classList.toggle('on', key === name);
+    }
+    if (name === 'board') drawBoard();
+  }
+
+  /**
+   * The local leaderboard: this career's own numbers, nothing invented. Every
+   * row reads progression.snapshot() - the same source the career strip and
+   * the main menu's fact board use - so no two screens can disagree about
+   * what the player has done. No fake rival names: a leaderboard full of bots
+   * is a lie this screen refuses to tell.
+   */
+  function drawBoard() {
+    if (!boardHost) return;
+    const s = snapshot();
+    const rows = [
+      ['STAGE CLEARED', s.stage + ' / ' + s.stagesTotal],
+      ['LEVEL', s.level],
+      ['XP', s.xp],
+      ['RECORD', s.wins + 'W · ' + s.losses + 'L'],
+      ['BEST STREAK', s.bestStreak],
+      ["TOWERS KO'D", s.towersDestroyed],
+      ['DAMAGE DEALT', s.totalDamageDealt],
+      ['MATCHES', s.matches],
+    ];
+    boardHost.innerHTML = '';
+    for (const [label, value] of rows) {
+      const row = document.createElement('div');
+      row.className = 'lb-row';
+      const name = document.createElement('span');
+      name.textContent = label;
+      const num = document.createElement('b');
+      num.textContent = String(value);
+      row.appendChild(name);
+      row.appendChild(num);
+      boardHost.appendChild(row);
     }
   }
 
@@ -403,15 +479,31 @@ export function createLobby({ audio, onStart }) {
     paint();
   }
 
+  // ── tab switching + the way back to the menu ─────────────────────────────
+  for (const key of Object.keys(tabs)) {
+    if (tabs[key]) {
+      tabs[key].addEventListener('click', () => {
+        if (audio) audio.play('card');
+        showTab(key);
+      });
+    }
+  }
+  if (menuBtn && onMenu) {
+    menuBtn.addEventListener('click', () => {
+      if (audio) audio.play('card');
+      hide();
+      onMenu();
+    });
+  }
+
   drawPick();
   drawDeck();
   drawStages();
   drawCareer();
-  // The markup carries the .on class so the panel is there on the first paint
-  // with no flash of HUD-only frame, but the body flag body.lobbying hides the
-  // hand beneath it - and that flag is not in the static markup, so it is
-  // asserted here where the two states live together.
-  show();
+  // No show() here. The main menu is the front door now: a fresh load lands
+  // on the menu, and the lobby is a room the player steps into from it.
+  // Constructing visible would put a deck picker in front of someone who has
+  // not chosen anything yet.
 
   function hide() {
     hideTooltip();
@@ -425,11 +517,15 @@ export function createLobby({ audio, onStart }) {
     // and a streak while the overlay was hidden, and the padlocks, the stage
     // grid and the default stage all have to move with it.
     stage = Math.min(1 + clearedStage(), STAGES.length);
+    // And the deck: NEW GAME wipes its save while the lobby is hidden, so
+    // re-reading here is what makes the wipe take effect without a reload.
+    rebuildDeck();
     drawCareer();
     drawStages();
     drawPick();
     drawDeck();
     updateDeckValidation();
+    showTab('stage');
   }
 
   return {

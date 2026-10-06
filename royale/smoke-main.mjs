@@ -43,6 +43,7 @@ const surface = {
   'towers.js': ['root', 'towers', 'update', 'reset', 'damageTower'],
   'bot.js': ['update', 'start', 'stop', 'setDifficulty', 'setElixirRate', 'setStage', 'difficulty'],
   'lobby.js': ['hide', 'show', 'deck', 'stage'],
+  'menu.js': ['hide', 'show'],
   'match.js': ['update', 'remaining', 'settle', 'start', 'stop', 'elixirMult', 'isOvertime', 'isLive', 'isDone', 'phase', 'elapsed', 'elixirPeriod'],
   'spells.js': ['cast'],
 };
@@ -59,6 +60,7 @@ const guarded = new Set(['setTimer', 'reset', 'flashOvertime', 'showResultPanel'
 const pairs = [
   ['ui', 'ui.js'], ['vfx', 'vfx.js'], ['troops', 'troops.js'],
   ['towerKit', 'towers.js'], ['bot', 'bot.js'], ['lobby', 'lobby.js'],
+  ['menu', 'menu.js'],
   ['matchClock', 'match.js'], ['spells', 'spells.js'], ['audio', 'audio.js'],
 ];
 for (const [obj, file] of pairs) {
@@ -203,6 +205,20 @@ ok(/const DEV = true;/.test(main), 'a DEV flag exists');
 ok(main.includes("if (DEV && qs.get('probe') === '1')"), 'the probe flag is behind DEV');
 ok(main.includes("if (DEV && qs.get('state') === 'damaged')"), 'the state flag is behind DEV');
 ok(!/^\s*if \(new URLSearchParams\(location\.search\)\.get\('probe'\)/m.test(main), 'the bare probe flag no longer arms a match');
+
+console.log('\n== the menu is the front door, quick battle stays casual ==');
+ok(main.includes("import { createMenu } from './menu.js';"), 'menu.js is imported');
+ok(main.includes("import { createLobby, DECK_KEY } from './lobby.js';"), 'the deck key is imported for the NEW GAME wipe');
+ok(/const menu = createMenu\(/.test(main), 'the menu is constructed');
+ok(/^menu\.show\(\);/m.test(main), 'a fresh load lands on the menu');
+ok(main.includes('onMenu: () => menu.show()'), 'the lobby can step back out to the menu');
+ok(main.includes('let casual = false;'), 'the casual flag exists');
+ok(main.includes('stage: casual ? 0 : currentStage,'), 'a casual match books stage 0, so no stage can clear');
+ok(main.includes('ui.setStage(casual ? 0 : currentStage);'), 'a casual match wears no stage badge');
+ok(/!casual && currentStage < STAGES\.length/.test(main), 'a casual match offers no NEXT STAGE');
+ok(main.includes('progression.reset()'), 'NEW GAME wipes the career');
+ok(main.includes('localStorage.removeItem(DECK_KEY)'), 'NEW GAME wipes the saved deck');
+ok((main.match(/menu\.hide\(\)/g) || []).length >= 3, 'every path off the menu hides it first');
 
 console.log('\n== the test surface sees the new systems ==');
 for (const k of ['__match', '__spells', '__vfx', '__progress', '__settled', '__result']) {

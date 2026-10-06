@@ -40,8 +40,13 @@ function el(tag) {
     _innerHTML: '',
     classList: {
       _s: new Set(),
-      add(...c) { c.forEach((x) => { this._s.add(x); n._sync(c, true); }); },
-      remove(...c) { c.forEach((x) => { this._s.delete(x); n._sync(c, false); }); },
+      // _sync takes ONE class name. The original passed the whole `c` array
+      // through, which stringified to the right thing on add() but made
+      // remove() delete an array from a set of strings - className silently
+      // kept the removed class. The MENU-button test asserts on className
+      // after a hide(), which is what finally exposed that.
+      add(...c) { c.forEach((x) => { this._s.add(x); n._sync(x, true); }); },
+      remove(...c) { c.forEach((x) => { this._s.delete(x); n._sync(x, false); }); },
       toggle(c, on) {
         if (on === undefined) on = !this._s.has(c);
         on ? this._s.add(c) : this._s.delete(c);
@@ -128,7 +133,9 @@ function ctx2d() {
 const nodes = {};
 for (const id of ['lobby', 'lobbyPick', 'lobbyDeck', 'lobbyDiff', 'lobbyStart', 'lobbySound',
   'lobbyCount', 'lobbyCountNum', 'lvLevelNum', 'lvBarFill', 'lvXpNum', 'lvRecord',
-  'lvStreak', 'lvStreakNum', 'lvTier']) {
+  'lvStreak', 'lvStreakNum', 'lvTier',
+  'lobbyMenu', 'lobbyBoard', 'ltabStage', 'ltabDeck', 'ltabBoard',
+  'paneStage', 'paneDeck', 'paneBoard']) {
   nodes[id] = el('div');
   nodes[id].id = id;
 }
@@ -162,7 +169,7 @@ globalThis.localStorage = (() => {
 })();
 
 const silent = { play() {}, unlock() {}, setMuted() {}, setMusic() {}, muted: false };
-const mk = () => createLobby({ audio: silent, onStart: () => {} });
+const mk = (opts = {}) => createLobby({ audio: silent, onStart: () => {}, ...opts });
 const cards = () => nodes.lobbyPick.children;
 const isLocked = (c) => c.className.includes('locked');
 
@@ -309,6 +316,57 @@ console.log('\nlobby: a save that cannot be written still plays');
   ok('a hostile storage does not take the lobby down', !threw);
   ok('the deck is still playable', !!l && l.deck.length === 4);
   globalThis.localStorage = real;
+}
+
+console.log('\nlobby: tabs swap panes and the board reads the career');
+{
+  localStorage.clear();
+  progression.reset();
+  mk();
+  // The board is built from snapshot(), so bank a match before opening it.
+  progression.recordMatch({ won: true, difficulty: 'normal', towersDestroyed: 1, damageDealt: 500 });
+  nodes.ltabBoard.click();
+  ok('the board tab lights up', nodes.ltabBoard.className.includes('on'));
+  ok('the board pane shows', nodes.paneBoard.className.includes('on'));
+  ok('the stage pane hides', !nodes.paneStage.className.includes('on'));
+  ok('the board rendered its rows', nodes.lobbyBoard.children.length >= 6);
+  ok('the first row is the cleared-stage row',
+    nodes.lobbyBoard.children[0].children[0].textContent === 'STAGE CLEARED');
+  ok('the stage row reports the real campaign position',
+    nodes.lobbyBoard.children[0].children[1].textContent ===
+      progression.snapshot().stage + ' / ' + progression.snapshot().stagesTotal);
+  nodes.ltabDeck.click();
+  ok('the deck tab takes over',
+    nodes.ltabDeck.className.includes('on') && nodes.paneDeck.className.includes('on'));
+  ok('the board pane yields', !nodes.paneBoard.className.includes('on'));
+
+  // Two lobbies share these nodes; only the second carries an onMenu, so the
+  // first mk() cannot have answered this click by accident.
+  let menued = 0;
+  const l2 = mk({ onMenu: () => { menued++; } });
+  l2.show();
+  ok('show() puts the lobby up', nodes.lobby.className.includes('on'));
+  nodes.lobbyMenu.click();
+  ok('the MENU button hands control back to the menu', menued === 1);
+  ok('the MENU click hid the lobby', !nodes.lobby.className.includes('on'));
+}
+
+console.log('\nlobby: show() re-reads the deck, so a NEW GAME wipe lands');
+{
+  localStorage.clear();
+  progression.reset();
+  const l = mk();
+  const target = cards().find((c) => !isLocked(c) && !c.className.includes('on'));
+  target.click();
+  const custom = JSON.stringify(l.deck);
+  ok('the swapped-in deck was saved', !!localStorage.getItem('viberoyale.deck'));
+  // The menu's NEW GAME does exactly this: the save disappears under the
+  // live lobby, and the next show() has to rebuild from nothing.
+  localStorage.removeItem('viberoyale.deck');
+  l.show();
+  ok('show() rebuilt a different hand after the wipe', JSON.stringify(l.deck) !== custom);
+  ok('the rebuilt hand is four unlocked cards',
+    l.deck.length === 4 && l.deck.every((id) => progression.isUnlocked(id)));
 }
 
 console.log('\nPASS - ' + passed + ' passed, ' + failed + ' failed');
