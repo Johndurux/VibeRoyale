@@ -25,12 +25,15 @@ const AGGRO = 6.5;
 // fighters rather than five models occupying the same cubic decimetre.
 const SEPARATION = 1.5;
 
-// Enemies keep a tighter body radius. Closing to fighting distance is not the
-// same as occupying the same tile - without this, two head-on fighters on a
-// narrow bridge interpenetrate and read as one model with two health bars.
-// Kept below every melee reach in CARDS (1.3 smallest), so a pair at this
-// radius is still inside its own swing and the fight never stalls.
-const ENEMY_SEPARATION = 1.0;
+// Enemies keep a tighter body radius than friends, but no tighter than the
+// model reads. A chibi plus its headwear spans ~1.2 units on screen, and the
+// isometric camera foreshortens the deck axis - at 1.0 a pressed pair already
+// looks like one model standing inside the other, which is exactly the bug
+// report that keeps coming back from the bridge. 1.25 keeps the pair visually
+// distinct while staying below every melee reach in CARDS (1.3 smallest), so
+// a pair at this radius is still inside its own swing and the fight stalls
+// for not one frame longer than the windup.
+const ENEMY_SEPARATION = 1.25;
 
 // Tower padding. A troop stops this far short of a tower's centre instead of
 // walking into it: the king is a vault, not a post, and clipping the model into
