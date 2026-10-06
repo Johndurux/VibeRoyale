@@ -15,7 +15,7 @@ import { createUI } from './ui.js';
 import { createAudio } from './audio.js';
 import { createBot } from './bot.js';
 import { createLobby } from './lobby.js';
-import { ARENA, TOWERS, PALETTE, CARDS, SPELLS, FEATURES } from './config.js';
+import { ARENA, TOWERS, PALETTE, CARDS, SPELLS, FEATURES, STAGES } from './config.js';
 import { neonBox } from './voxel.js';
 import * as THREE from 'three';
 
@@ -113,6 +113,9 @@ let matchLive = false;
 let damageDealtThisMatch = 0;
 let spellsCastThisMatch = 0;
 let elixirSpentThisMatch = 0;
+// The stage currently being played, set by startMatch from the STAGES table.
+// endMatch books progression against it and PLAY AGAIN replays it.
+let currentStage = 1;
 // The single settlement guard. A king falling and the clock running out both
 // route through matchClock.settle(), but endMatch() is also reachable from the
 // HUD, so the gate lives at the one function that closes the match.
@@ -132,6 +135,7 @@ const ui = createUI({
     // in endMatch(); this is here only so the HUD can say so without owning
     // match state. Deliberately does not stop the bot or play a cue.
   },
+  onMenu: () => quitToLobby(),
 });
 
 // Every tower hit raises a damage number at the tower that took it, and says
@@ -640,11 +644,12 @@ function endMatch(result) {
   if (FEATURES.dynamicSky) resetSky();
 
   const won = result.winner === 'player';
-  // recordMatch returns what the match was worth: the XP total, the level it
-  // landed on, the streak tier and the cards it opened. It is booked exactly
-  // once, here, and only on a match that actually reached a result.
+  // recordMatch returns what the match was worth: the XP total, the stage it
+  // cleared, the level it landed on, the streak tier and the cards it opened.
+  // It is booked exactly once, here, and only on a match that reached a result.
   const banked = progression.recordMatch({
     won,
+    stage: currentStage,
     difficulty: bot.difficulty,
     towersDestroyed: towersLostToPlayer(),
     damageDealt: damageDealtThisMatch,
@@ -660,10 +665,12 @@ function endMatch(result) {
   // sitting on a placeholder.
   lastResult = {
     ...result,
+    stage: currentStage,
+    stageCleared: banked.stageCleared,
     duration: matchClock.elapsed,
     progress: after,
     // Taken from the booking rather than recomputed: newlyUnlocked() wants
-    // level numbers, not the snapshots they came from, and passing the
+    // stage numbers, not the snapshots they came from, and passing the
     // snapshots silently produced an empty list every single match.
     unlocked: banked.unlocked,
     // What the match earned, not what the career totals to. The panel shows
@@ -673,6 +680,7 @@ function endMatch(result) {
       base: banked.base,
       towers: banked.towerBonus,
       streak: banked.streakBonus,
+      stage: banked.stageBonus,
     },
     tier: banked.tier,
     leveledUp: banked.leveledUp,
@@ -683,10 +691,15 @@ function endMatch(result) {
       spellsCast: spellsCastThisMatch,
     },
     // Both buttons resolve here, on the payload, so the result screen never
-    // has to know how a match is rebuilt. PLAY AGAIN reuses the deck the
-    // player just won or lost with; CHANGE DECK hands control back to the
-    // lobby, which is the only place a deck can be edited.
-    onPlayAgain: () => startMatch(bot.difficulty, ui.deck || lobby.deck),
+    // has to know how a match is rebuilt. A won stage with a next one offers
+    // NEXT STAGE (the campaign run continues without a lobby detour); PLAY
+    // AGAIN replays this stage (a failed stage is a retry, stage 15 is the
+    // end of the line); CHANGE DECK hands control back to the lobby, which is
+    // the only place a deck can be edited.
+    onPlayAgain: () => startMatch(currentStage, ui.deck || lobby.deck),
+    onNextStage: currentStage < STAGES.length
+      ? () => startMatch(currentStage + 1, ui.deck || lobby.deck)
+      : null,
     onChangeDeck: () => {
       // The match is already stopped by the time this runs, so all that is
       // left is to put the player back in front of the deck picker. The board
@@ -704,7 +717,28 @@ function endMatch(result) {
   else if (ui.showResult) ui.showResult(won, result.reason);
 }
 
-function startMatch(difficulty, deck) {
+/**
+ * Leave a live match for the lobby (the MENU button), without settling it.
+ *
+ * An abandoned match banks nothing - the same rule as closing the tab, so
+ * quitting to dodge a loss never pays. The board keeps its state behind the
+ * lobby rather than being rebuilt; the next BATTLE rebuilds everything from
+ * scratch the way any match start does. Nothing here advances or records the
+ * campaign: only endMatch() books progression.
+ */
+function quitToLobby() {
+  if (settled) return; // the result screen owns the flow once settled
+  matchLive = false;
+  matchClock.stop();
+  bot.stop();
+  audio.setMusic(false);
+  if (FEATURES.dynamicSky) resetSky();
+  if (ui.reset) ui.reset();
+  refreshGhost();
+  lobby.show();
+}
+
+function startMatch(stage, deck) {
   // Every per-match counter and every animation resets here, not in the UI
   // constructor. This is the whole reason play-again works without a reload.
   damageDealtThisMatch = 0;
@@ -715,16 +749,29 @@ function startMatch(difficulty, deck) {
   camHome = null;
   shakeAmp = 0;
 
+  // The stage is the difficulty: one row of the STAGES table picks the rival's
+  // behaviour tier, its elixir income, and how strong its troops and towers
+  // are. Clamped so a stale save or a probe cannot walk the table off its end.
+  const cfg = STAGES[Math.max(0, Math.min(STAGES.length, stage) - 1)] || STAGES[0];
+  currentStage = cfg.stage;
+
   ui.setDeck(deck);
   // The HUD's own per-match state - the selected card, the elixir-leak timer,
   // any result overlay - is cleared here rather than reloaded, so a second
   // match starts from the same state the first one did.
   if (ui.reset) ui.reset();
-  bot.setDifficulty(difficulty);
+  ui.setStage(currentStage);
+  // One call arms the whole rival: behaviour knobs, elixir income, and the
+  // hand mirror for this stage.
+  bot.setStage(cfg);
+  troops.setEnemyMods({ hp: cfg.troopHp, dps: cfg.troopDps });
   bot.start();
   // Order matters: the board is rebuilt and the clock armed before the loop is
   // allowed to run, so the first live frame already sees a consistent world.
   towerKit.reset();
+  // After the rebuild: scale the rival's towers from their unscaled base. On
+  // every match, from base - so the multiplier never compounds across rematches.
+  towerKit.setSideHpScale('enemy', cfg.towerHp);
   troops.clear();
   matchClock.start();
   if (FEATURES.dynamicSky) setSkyMood('day');
@@ -752,7 +799,7 @@ const qs = new URLSearchParams(location.search);
 
 if (DEV && qs.get('probe') === '1') {
   lobby.hide();
-  startMatch('normal', CHARACTERS.filter((c) => c.unlocked !== false).map((c) => c.id));
+  startMatch(1, CHARACTERS.map((c) => c.id));
 }
 
 // -- test surface ------------------------------------------------------------
@@ -769,6 +816,7 @@ try {
     __passable: passable,
     __characters: { CHARACTERS, CAM_ORIGIN },
     __cards: CARDS,
+    __stages: STAGES,
     __ghost: { ghost, ok: ghostOk, no: ghostNo },
     __damage: damageTower,
     __ui: ui,

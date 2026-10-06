@@ -133,13 +133,79 @@ export const PROGRESS = {
   levelGrowth: 1.2,
 };
 
+// ── stages ────────────────────────────────────────────────────────────────
+// The campaign: fifteen matches, each harder than the last. Every stage picks
+// the rival's behaviour tier (RECRUIT/RIVAL/MARSHAL, the same three profiles
+// the bot ships with) and stacks multipliers on top, so a late stage is not
+// just a sharper opponent but a stronger one: faster elixir, tougher troops,
+// tougher towers.
+//
+// The multipliers only ever touch the ENEMY side. The player's elixir, troops
+// and towers read their usual tables; nothing here can make the player's own
+// deck weaker, which is the line a difficulty system must not cross.
+export const STAGES = [
+  // 1-5 · RECRUIT tier - learning the ropes against a slow, sloppy rival.
+  // The multipliers climb steeply inside the tier on purpose: stage 2 should
+  // already feel meaner than stage 1, not identical until stage 6 changes tier.
+  //
+  // `bot` is the rival's BRAIN for the stage, overriding its difficulty tier:
+  //   think  = seconds between decisions (lower = reacts faster)
+  //   jitter = placement noise in world units (lower = places better spots)
+  //   answer = chance a threat is answered at all
+  //   pushAt = elixir it banks before opening a lane (lower = pushes sooner)
+  //   commit = chance of opening early on a big card
+  // The curve runs smoothly from half-asleep (stage 1) to inhuman (stage 15)
+  // so every single stage plays sharper than the one before it.
+  { stage: 1,  botLevel: 'easy',   elixir: 0.85, troopHp: 0.90, troopDps: 0.90, towerHp: 0.90, xp: 60,
+    bot: { think: [3.2, 4.6], jitter: 3.2,  answer: 0.50, pushAt: 9.5, commit: 0.05 } },
+  { stage: 2,  botLevel: 'easy',   elixir: 1.00, troopHp: 1.10, troopDps: 1.05, towerHp: 1.00, xp: 80,
+    bot: { think: [2.8, 4.0], jitter: 2.6,  answer: 0.60, pushAt: 8.5, commit: 0.15 } },
+  { stage: 3,  botLevel: 'easy',   elixir: 1.15, troopHp: 1.25, troopDps: 1.15, towerHp: 1.10, xp: 100,
+    bot: { think: [2.5, 3.6], jitter: 2.2,  answer: 0.68, pushAt: 7.8, commit: 0.25 } },
+  { stage: 4,  botLevel: 'easy',   elixir: 1.30, troopHp: 1.45, troopDps: 1.25, towerHp: 1.20, xp: 120,
+    bot: { think: [2.2, 3.2], jitter: 1.8,  answer: 0.74, pushAt: 7.2, commit: 0.32 } },
+  { stage: 5,  botLevel: 'easy',   elixir: 1.45, troopHp: 1.65, troopDps: 1.35, towerHp: 1.30, xp: 150,
+    bot: { think: [2.0, 2.9], jitter: 1.5,  answer: 0.80, pushAt: 6.6, commit: 0.40 } },
+  // 6-10 · RIVAL tier - it answers threats and pushes back, and out-regens you.
+  { stage: 6,  botLevel: 'normal', elixir: 1.15, troopHp: 1.25, troopDps: 1.10, towerHp: 1.10, xp: 180,
+    bot: { think: [1.8, 2.6], jitter: 1.2,  answer: 0.84, pushAt: 6.0, commit: 0.48 } },
+  { stage: 7,  botLevel: 'normal', elixir: 1.25, troopHp: 1.35, troopDps: 1.15, towerHp: 1.15, xp: 210,
+    bot: { think: [1.6, 2.3], jitter: 1.0,  answer: 0.87, pushAt: 5.6, commit: 0.55 } },
+  { stage: 8,  botLevel: 'normal', elixir: 1.35, troopHp: 1.45, troopDps: 1.20, towerHp: 1.20, xp: 240,
+    bot: { think: [1.4, 2.1], jitter: 0.85, answer: 0.90, pushAt: 5.2, commit: 0.62 } },
+  { stage: 9,  botLevel: 'normal', elixir: 1.45, troopHp: 1.55, troopDps: 1.25, towerHp: 1.25, xp: 280,
+    bot: { think: [1.3, 1.9], jitter: 0.7,  answer: 0.92, pushAt: 4.9, commit: 0.68 } },
+  { stage: 10, botLevel: 'normal', elixir: 1.55, troopHp: 1.65, troopDps: 1.30, towerHp: 1.30, xp: 320,
+    bot: { think: [1.2, 1.7], jitter: 0.6,  answer: 0.94, pushAt: 4.6, commit: 0.74 } },
+  // 11-15 · MARSHAL tier - fast, precise, relentless, and heavily buffed.
+  { stage: 11, botLevel: 'hard',   elixir: 1.35, troopHp: 1.55, troopDps: 1.25, towerHp: 1.25, xp: 370,
+    bot: { think: [1.05, 1.5], jitter: 0.5,  answer: 0.955, pushAt: 4.3, commit: 0.80 } },
+  { stage: 12, botLevel: 'hard',   elixir: 1.45, troopHp: 1.70, troopDps: 1.35, towerHp: 1.35, xp: 430,
+    bot: { think: [0.95, 1.35], jitter: 0.42, answer: 0.97,  pushAt: 4.0, commit: 0.85 } },
+  { stage: 13, botLevel: 'hard',   elixir: 1.55, troopHp: 1.85, troopDps: 1.45, towerHp: 1.45, xp: 500,
+    bot: { think: [0.85, 1.2],  jitter: 0.35, answer: 0.98,  pushAt: 3.8, commit: 0.89 } },
+  { stage: 14, botLevel: 'hard',   elixir: 1.70, troopHp: 2.00, troopDps: 1.55, towerHp: 1.55, xp: 600,
+    bot: { think: [0.75, 1.05], jitter: 0.28, answer: 0.99,  pushAt: 3.6, commit: 0.93 } },
+  { stage: 15, botLevel: 'hard',   elixir: 1.90, troopHp: 2.20, troopDps: 1.70, towerHp: 1.70, xp: 750,
+    bot: { think: [0.65, 0.9],  jitter: 0.2,  answer: 1.0,   pushAt: 3.4, commit: 1.0 } },
+];
+
 // ── unlocks ───────────────────────────────────────────────────────────────
-// Five cards to start, the remaining seven across levels 2-8. The order is
-// cheapest-and-most-basic first, so an early level-up widens a hand that can
-// already fight rather than handing over a card the player has no answer for.
-export const UNLOCKS = {
-  free: 5,
-  ladder: [2, 3, 4, 5, 6, 7, 8],
+// Five cards to start; the other seven are gated behind stage clears, mapped
+// card by card below. The value is the stage that must be CLEARED: winning
+// stage 1 grants TUX for the stage 2 attempt, winning stage 2 grants
+// GOGGLES, and so on - the deck you bring into a stage is always cards you
+// have already earned. Troops come first so the hand grows before the spells
+// do - a free 4-cost AoE blast would delete the learning curve rather than
+// flatten it. Anything not in this table is free from the start (gate 0).
+export const STAGE_UNLOCKS = {
+  tux: 1,
+  goggles: 2,
+  captain: 3,
+  armor: 4,
+  fireball: 7,
+  freeze: 9,
+  heal: 11,
 };
 
 // ── feature flags ─────────────────────────────────────────────────────────

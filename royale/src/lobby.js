@@ -10,9 +10,9 @@
 // never touches the 3D scene.
 
 import { CHARACTERS } from './characters.js';
-import { CARDS, SPELLS, RARITY } from './config.js';
+import { CARDS, SPELLS, RARITY, STAGES } from './config.js';
 import { renderFaces, FACE_PX } from './ui.js';
-import { isUnlocked, unlockLevelFor, snapshot } from './progression.js';
+import { isUnlocked, unlockStageFor, snapshot } from './progression.js';
 
 // How many cards a deck holds. Four expresses a plan - a tank, two answers, a
 // win condition - without asking anyone to study nine stats before their first
@@ -80,7 +80,7 @@ const LEVELS = [
  */
 export function createLobby({ audio, onStart }) {
   const root = document.getElementById('lobby');
-  if (!root) return { hide() {}, show() {}, deck: [], difficulty: 'normal' };
+  if (!root) return { hide() {}, show() {}, deck: [], stage: 1 };
 
   // Every unlocked fighter is a candidate. A character added with
   // unlocked:false stays in the world (a probe can still spawn it) but is not
@@ -103,7 +103,12 @@ export function createLobby({ audio, onStart }) {
   // level-up - a card that opened during that match has to lose its padlock
   // on the way back in, not on the next reload.
   const careerLevel = () => snapshot().level;
-  let difficulty = 'normal';
+  // The campaign position, live for the same reason: winning a stage re-renders
+  // this screen, and the next stage must already be open when it does.
+  const clearedStage = () => snapshot().stage;
+  // Stage the BATTLE button will launch. Defaults to the first uncleared
+  // stage, so the lobby always opens one click away from moving forward.
+  let stage = Math.min(1 + clearedStage(), STAGES.length);
 
   const pickHost = document.getElementById('lobbyPick');
   const deckHost = document.getElementById('lobbyDeck');
@@ -203,7 +208,7 @@ export function createLobby({ audio, onStart }) {
     const tier = RARITY[c.rarity] || RARITY.common;
     const cost = (CARDS[c.id] || {}).cost;
     const locked = !isUnlocked(c.id);
-    const fresh = unlockLevelFor(c.id) === careerLevel();
+    const fresh = isUnlocked(c.id) && unlockStageFor(c.id) === clearedStage() && clearedStage() > 0;
     const el = document.createElement('button');
     el.type = 'button';
     el.className = 'lcard' + (opts.small ? ' small' : '') + (opts.selected ? ' on' : '') +
@@ -219,9 +224,9 @@ export function createLobby({ audio, onStart }) {
       '<span class="lcard-name"></span>' +
       '<span class="lcard-role"></span>' +
       '<span class="lcard-cost"></span>' +
-      // The badge names the level that opens the card rather than saying
-      // "locked", because the number is the reason to play another match.
-      (locked ? '<span class="lcard-lock"><b>&#128274;</b>LVL ' + unlockLevelFor(c.id) + '</span>' : '') +
+      // The badge names the stage that opens the card rather than saying
+      // "locked", because the number is the reason to play another stage.
+      (locked ? '<span class="lcard-lock"><b>&#128274;</b>STAGE ' + unlockStageFor(c.id) + '</span>' : '') +
       (fresh ? '<span class="lcard-new">NEW!</span>' : '');
     el.querySelector('.lcard-name').textContent = c.name;
     el.querySelector('.lcard-role').textContent = c.role.split(' · ')[0];
@@ -311,21 +316,34 @@ export function createLobby({ audio, onStart }) {
     renderFaces(faces);
   }
 
-  // ── difficulty ───────────────────────────────────────────────────────────
-  function drawDiff() {
+  // ── stage select ─────────────────────────────────────────────────────────
+  // Replaces the old difficulty picker: the stage IS the difficulty now, a
+  // row in the STAGES table that picks the rival's behaviour tier and stacks
+  // multipliers on top. A stage is playable when it is the first uncleared
+  // one or anything before it; replaying old stages is how a stuck player
+  // earns repeat XP, so they stay lit rather than going dark.
+  function drawStages() {
     if (!diffHost) return;
     diffHost.innerHTML = '';
-    for (const lv of LEVELS) {
+    const cleared = clearedStage();
+    for (const cfg of STAGES) {
       const b = document.createElement('button');
       b.type = 'button';
-      b.className = 'ldiff' + (lv.key === difficulty ? ' on' : '');
+      const locked = cfg.stage > cleared + 1;
+      const lv = LEVELS.find((l) => l.key === cfg.botLevel) || LEVELS[1];
+      b.className = 'ldiff stage' + (cfg.stage === stage ? ' on' : '') + (locked ? ' locked' : '');
+      if (locked) b.disabled = true;
       b.innerHTML = '<span class="ldiff-name"></span><span class="ldiff-blurb"></span>';
-      b.querySelector('.ldiff-name').textContent = lv.name;
-      b.querySelector('.ldiff-blurb').textContent = lv.blurb;
+      b.querySelector('.ldiff-name').innerHTML = locked
+        ? cfg.stage + ' &#128274;'
+        : cfg.stage + ' &middot; ' + lv.name;
+      b.querySelector('.ldiff-blurb').textContent = locked
+        ? 'CLEAR STAGE ' + (cleared + 1)
+        : lv.blurb;
       b.addEventListener('click', () => {
-        difficulty = lv.key;
+        stage = cfg.stage;
         if (audio) audio.play('card');
-        drawDiff();
+        drawStages();
       });
       diffHost.appendChild(b);
     }
@@ -348,7 +366,7 @@ export function createLobby({ audio, onStart }) {
         if (countEl) countEl.classList.remove('on');
         hide();
         if (audio) audio.setMusic(true);
-        if (onStart) onStart(difficulty, deck.slice());
+        if (onStart) onStart(stage, deck.slice());
         busy = false;
         updateDeckValidation();
         return;
@@ -387,7 +405,7 @@ export function createLobby({ audio, onStart }) {
 
   drawPick();
   drawDeck();
-  drawDiff();
+  drawStages();
   drawCareer();
   // The markup carries the .on class so the panel is there on the first paint
   // with no flash of HUD-only frame, but the body flag body.lobbying hides the
@@ -403,9 +421,12 @@ export function createLobby({ audio, onStart }) {
   function show() {
     root.classList.add('on');
     document.body.classList.add('lobbying');
-    // Re-read on the way in. A match can have banked a level-up and a streak
-    // while the overlay was hidden, and the padlocks have to move with it.
+    // Re-read on the way in. A match can have banked a stage clear, a level
+    // and a streak while the overlay was hidden, and the padlocks, the stage
+    // grid and the default stage all have to move with it.
+    stage = Math.min(1 + clearedStage(), STAGES.length);
     drawCareer();
+    drawStages();
     drawPick();
     drawDeck();
     updateDeckValidation();
@@ -415,6 +436,6 @@ export function createLobby({ audio, onStart }) {
     hide,
     show,
     get deck() { return deck.slice(); },
-    get difficulty() { return difficulty; },
+    get stage() { return stage; },
   };
 }

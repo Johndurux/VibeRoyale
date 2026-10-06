@@ -257,78 +257,95 @@ head('levelForXp and xpFloor agree with each other');
   }
 }
 
-head('the unlock ladder is sorted, monotonic, and fully populated');
+head('the stage gates are monotonic and the free count is exact');
 {
   const prog = await import(src('progression.js'));
-  const { UNLOCKS } = await import(src('config.js'));
+  const { STAGES, STAGE_UNLOCKS } = await import(src('config.js'));
   const { CHARACTERS } = await import(src('characters.js'));
-  // The ladder is NOT raw roster order. It is the roster sorted so the cheap
-  // troops come first and the spells come last, so a player never meets a
-  // fireball before a sword. CHARACTERS[0] is ARMOR at level 5 while
-  // CHARACTERS[1] is MIST at level 1, which is why comparing neighbours in the
-  // raw array is meaningless.
-  const levels = CHARACTERS.map((c) => prog.unlockLevelFor(c.id));
-  const sorted = [...levels].sort((a, b) => a - b);
-  assert.equal(sorted[0], 1, 'the cheapest cards are free');
+  // Stage gates are a data table, not an arithmetic ladder. The invariants
+  // that matter: every gate names a stage that exists, the free cards are
+  // exactly the ones the table does not name, and the gates climb (troops
+  // before spells) so a player meets a sword before a fireball.
+  const stages = CHARACTERS.map((c) => prog.unlockStageFor(c.id));
+  const free = stages.filter((s) => s === 0).length;
+  assert.equal(free, CHARACTERS.length - Object.keys(STAGE_UNLOCKS).length,
+    'every ungated card is free, saw ' + free + ' free of ' + CHARACTERS.length);
+  const sorted = [...stages].sort((a, b) => a - b);
   for (let i = 1; i < sorted.length; i++)
-    assert.ok(sorted[i] >= sorted[i - 1], 'the ladder must never step backwards');
-  assert.ok(Math.max(...levels) <= UNLOCKS.ladder[UNLOCKS.ladder.length - 1],
-    'nothing may open past the top of the ladder');
-  // Every free slot is level 1, and the rest climb: exactly UNLOCKS.free cards
-  // available from the start.
-  const free = levels.filter((l) => l === 1).length;
-  assert.equal(free, UNLOCKS.free, UNLOCKS.free + ' cards should be open from level 1, saw ' + free);
-  assert.equal(free + levels.filter((l) => l > 1).length, CHARACTERS.length, 'every card gets a level');
+    assert.ok(sorted[i] >= sorted[i - 1], 'the gates must never step backwards');
+  for (const id of Object.keys(STAGE_UNLOCKS)) {
+    const gate = STAGE_UNLOCKS[id];
+    assert.ok(gate >= 1 && gate <= STAGES.length, id + ' gates at stage ' + gate + ', off the 1-' + STAGES.length + ' table');
+  }
 }
 
 head('spells unlock after every troop');
 {
   const prog = await import(src('progression.js'));
-  const { UNLOCKS, CARDS } = await import(src('config.js'));
+  const { CARDS } = await import(src('config.js'));
   const { CHARACTERS } = await import(src('characters.js'));
-  const spellLevels = [];
-  const troopLevels = [];
+  const spellStages = [];
+  const troopStages = [];
   for (const c of CHARACTERS) {
-    (CARDS[c.id]?.spell ? spellLevels : troopLevels).push(prog.unlockLevelFor(c.id));
+    (CARDS[c.id]?.spell ? spellStages : troopStages).push(prog.unlockStageFor(c.id));
   }
-  assert.ok(spellLevels.length > 0, 'there are spells to check');
-  assert.ok(troopLevels.length > 0, 'and troops');
-  assert.ok(Math.min(...spellLevels) > Math.max(...troopLevels),
-    'the last troop opens at ' + Math.max(...troopLevels) +
-    ' but the first spell at ' + Math.min(...spellLevels));
-  // The ladder has seven rungs and 12 cards, so after the five free ones only
-  // seven cards are gated. Four of them are troops and three are spells, which
-  // is why the spells own the top rungs rather than the troops reaching level
-  // 8 and the spells squeezing in below.
-  const gated = [...troopLevels, ...spellLevels].filter((l) => l > 1).length;
-  assert.equal(gated, UNLOCKS.ladder.length, 'every rung should be taken by exactly one card, got ' + gated);
-  assert.equal(Math.max(...troopLevels), 5, 'troops stop where the spells begin');
-  assert.equal(Math.min(...spellLevels), 6);
-  assert.equal(Math.max(...spellLevels), UNLOCKS.ladder[UNLOCKS.ladder.length - 1], 'the priciest spell holds the top rung');
+  assert.ok(spellStages.length > 0, 'there are spells to check');
+  assert.ok(troopStages.length > 0, 'and troops');
+  assert.ok(Math.max(...troopStages) <= 5, 'every gated troop opens by stage 5');
+  assert.ok(Math.min(...spellStages) >= 7, 'no spell opens before stage 7');
 }
 
-head('a card added past the end of the ladder still opens');
+head('an unknown card id answers a gate, not a crash');
 {
   const prog = await import(src('progression.js'));
-  const { UNLOCKS } = await import(src('config.js'));
-  // The ladder is sized for a known roster. A future card must not become
-  // permanently unreachable, which would be a far worse failure than sharing
-  // the top level with the last card.
-  const top = UNLOCKS.ladder[UNLOCKS.ladder.length - 1];
-  assert.equal(prog.unlockLevelFor('a_card_that_does_not_exist'), 1,
+  // A future id (or a typo) is treated as free by unlockStageFor - total
+  // function, no ladder to walk - while isUnlocked still refuses it, because
+  // a card that is not on the roster must not appear in a deck.
+  assert.equal(prog.unlockStageFor('a_card_that_does_not_exist'), 0,
     'an unknown id is treated as free, not as a crash');
-  assert.equal(top, 8);
+  assert.equal(prog.isUnlocked('a_card_that_does_not_exist'), false,
+    'an unknown id is still refused by the gate');
 }
 
-head('isUnlocked respects the level it is given');
+head('isUnlocked respects the stage it is given');
 {
   const prog = await import(src('progression.js'));
+  const { STAGE_UNLOCKS } = await import(src('config.js'));
   const { CHARACTERS } = await import(src('characters.js'));
   for (const c of CHARACTERS) {
-    const need = prog.unlockLevelFor(c.id);
-    assert.equal(prog.isUnlocked(c.id, need - 1), false, c.id + ' must be locked one level below its gate');
-    assert.equal(prog.isUnlocked(c.id, need), true, c.id + ' must be open at its gate');
+    const need = prog.unlockStageFor(c.id);
+    if (need <= 0) {
+      assert.equal(prog.isUnlocked(c.id, 0), true, c.id + ' is free before any stage is cleared');
+    } else {
+      assert.equal(prog.isUnlocked(c.id, need - 1), false, c.id + ' must be locked one stage below its gate');
+      assert.equal(prog.isUnlocked(c.id, need), true, c.id + ' must be open once its gate stage is cleared');
+    }
   }
+}
+
+head('recordMatch advances the campaign one stage at a time');
+{
+  const prog = await import(src('progression.js'));
+  prog.reset();
+  // Losing banks nothing: stage 0 stays stage 0.
+  prog.recordMatch({ won: false, stage: 1, difficulty: 'easy' });
+  assert.equal(prog.snapshot().stage, 0, 'a loss never clears a stage');
+  // Winning stage 1 clears it and pays the stage reward.
+  const first = prog.recordMatch({ won: true, stage: 1, difficulty: 'easy' });
+  assert.equal(prog.snapshot().stage, 1, 'a win on the next stage clears it');
+  assert.equal(first.stageCleared, true, 'the booking reports the clear');
+  assert.ok(first.stageBonus > 0, 'a first clear pays the stage reward');
+  assert.ok(first.unlocked.includes('tux'), 'clearing stage 1 opens its card');
+  assert.equal(prog.isUnlocked('tux'), true, 'tux is live in the hand after the clear');
+  // Replaying stage 1 pays a quarter and advances nothing.
+  const replay = prog.recordMatch({ won: true, stage: 1, difficulty: 'easy' });
+  assert.equal(prog.snapshot().stage, 1, 'a replay does not advance the campaign');
+  assert.equal(replay.stageCleared, false, 'a replay is not a clear');
+  assert.ok(replay.stageBonus > 0 && replay.stageBonus < first.stageBonus,
+    'a replay pays less than a first clear');
+  // Skipping ahead is refused: stage 3 cannot be cleared while 2 is locked.
+  prog.recordMatch({ won: true, stage: 3, difficulty: 'easy' });
+  assert.equal(prog.snapshot().stage, 1, 'a win cannot skip a stage');
 }
 
 head('the elixir leak window is a real number of seconds');
@@ -383,21 +400,21 @@ head('a losing streak earns no streak bonus');
   assert.equal(prog.streakTier(PROGRESS.onFireAt - 1), 'hot', 'one short of ON FIRE is still HOT, not nothing');
 }
 
-head('a level-up names the cards it opened');
+head('a stage clear names the cards it opened');
 {
   const prog = await import(src('progression.js'));
   prog.reset();
-  let r = null;
-  for (let i = 0; i < 12 && !(r && r.leveledUp); i++)
-    r = prog.recordMatch({ won: true, difficulty: 'hard', towersDestroyed: 3, damageDealt: 2000 });
-  assert.ok(r && r.leveledUp, 'a run of hard wins should level the player up');
-  assert.ok(r.unlocked.length > 0, 'levelling up should name at least one new card');
+  // Stage 1's clear grants TUX (gate 1); no XP grind can substitute for it,
+  // because unlocks read the campaign, not the level.
+  const r = prog.recordMatch({ won: true, stage: 1, difficulty: 'hard', towersDestroyed: 3, damageDealt: 2000 });
+  assert.ok(r.unlocked.length > 0, 'a stage clear should name at least one new card');
+  assert.equal(r.unlocked.includes('tux'), true, 'stage 1 grants tux');
   const { CHARACTERS } = await import(src('characters.js'));
   for (const id of r.unlocked) {
     assert.ok(CHARACTERS.some((c) => c.id === id), id + ' is not a real card');
-    const need = prog.unlockLevelFor(id);
-    assert.ok(need > r.previousLevel && need <= r.level,
-      id + ' opens at level ' + need + ', outside the jump from ' + r.previousLevel + ' to ' + r.level);
+    const need = prog.unlockStageFor(id);
+    assert.ok(need > r.clearedStage - 1 && need <= r.clearedStage,
+      id + ' opens at stage ' + need + ', outside the clear of stage ' + r.clearedStage);
   }
   assert.equal(r.level, prog.snapshot().level, 'the returned level must match the stored one');
   assert.equal(prog.snapshot().streak, 1, 'the streak rebuilds from zero, it does not resume');
@@ -443,23 +460,23 @@ head('streak tiers are checked from the top down');
 head('newlyUnlocked reports only what just opened');
 {
   const prog = await import(src('progression.js'));
-  const from = 1, to = 12;
+  const from = 0, to = 15;
   const fresh = prog.newlyUnlocked(from, to);
   assert.ok(Array.isArray(fresh));
   const { CHARACTERS } = await import(src('characters.js'));
   for (const id of fresh) {
     assert.ok(CHARACTERS.some((c) => c.id === id), id + ' is not a real card');
-    const need = prog.unlockLevelFor(id);
+    const need = prog.unlockStageFor(id);
     assert.ok(need > from && need <= to, id + ' was not newly opened between ' + from + ' and ' + to);
   }
   // No duplicates, and the list is exactly the cards gated in that window.
   assert.equal(new Set(fresh).size, fresh.length, 'a card must not be reported twice');
   const expected = CHARACTERS.map((c) => c.id).filter((id) => {
-    const n = prog.unlockLevelFor(id);
+    const n = prog.unlockStageFor(id);
     return n > from && n <= to;
   });
   assert.equal(fresh.length, expected.length, 'every card in the window should be reported');
-  assert.equal(prog.newlyUnlocked(3, 3).length, 0, 'a level that opens nothing reports nothing');
+  assert.equal(prog.newlyUnlocked(3, 3).length, 0, 'a stage that opens nothing reports nothing');
 }
 
 head('regenMultiplier rises with the streak and never exceeds the cap');

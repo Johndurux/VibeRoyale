@@ -41,8 +41,8 @@ const surface = {
   'audio.js': ['unlock', 'play', 'setMusic', 'setScene'],
   'troops.js': ['root', 'troops', 'update', 'spawn', 'clear', 'blast', 'freezeArea', 'inRadius', 'MAX_TROOPS'],
   'towers.js': ['root', 'towers', 'update', 'reset', 'damageTower'],
-  'bot.js': ['update', 'start', 'stop', 'setDifficulty', 'difficulty'],
-  'lobby.js': ['hide', 'show', 'deck', 'difficulty'],
+  'bot.js': ['update', 'start', 'stop', 'setDifficulty', 'setElixirRate', 'setStage', 'difficulty'],
+  'lobby.js': ['hide', 'show', 'deck', 'stage'],
   'match.js': ['update', 'remaining', 'settle', 'start', 'stop', 'elixirMult', 'isOvertime', 'isLive', 'isDone', 'phase', 'elapsed', 'elixirPeriod'],
   'spells.js': ['cast'],
 };
@@ -146,7 +146,7 @@ ok(!start.includes('progression.recordMatch'), 'an abandoned match banks nothing
 console.log('\n== the play-again path exists ==');
 ok(endBody.includes('onPlayAgain'), 'the result carries onPlayAgain');
 ok(endBody.includes('onChangeDeck'), 'the result carries onChangeDeck');
-ok(endBody.includes('startMatch(bot.difficulty'), 'play-again reuses the same difficulty');
+ok(endBody.includes('startMatch(currentStage'), 'play-again replays the same stage');
 ok(endBody.includes('lobby.show()'), 'change-deck returns to the lobby');
 ok(!endBody.includes('location.reload'), 'nothing reloads the page, so the career save survives');
 

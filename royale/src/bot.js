@@ -15,7 +15,7 @@
 // drop a troop in the river, past the back line, or onto a full field, because
 // the same guards refuse it.
 
-import { ARENA, CARDS } from './config.js';
+import { ARENA, CARDS, STAGE_UNLOCKS } from './config.js';
 import { CHARACTERS } from './characters.js';
 import { passable } from './troops.js';
 
@@ -46,6 +46,17 @@ const DEFEND_MIN_Z = -(DEPLOY_NEAR_Z + 0.2);
 // Minimum gap between two of the bot's own troops, so it does not stack its
 // whole deck into one tile and then watch it trade alone.
 const CROWD_GAP = 2.2;
+
+// ── the presence guarantee ────────────────────────────────────────────────
+// Patience is a difficulty dial, not an absence. Whatever a tier's knobs say,
+// the rival may never leave the board looking empty: its first fighter is out
+// within FIRST_DEPLOY_BY seconds of the match going live, and the silence
+// between deployments never exceeds FORCE_DEPLOY_EVERY seconds. A slow tier
+// waits longer between THOUGHTS - it never just stands there. The forced card
+// is always a TROOP, never a spell: a blast with no good target would spend
+// elixir on nothing just to look busy.
+const FIRST_DEPLOY_BY = 4;
+const FORCE_DEPLOY_EVERY = 8;
 
 // ── difficulty ────────────────────────────────────────────────────────────
 // Four knobs, not one difficulty number, because they are the four ways a
@@ -97,16 +108,28 @@ export function createBot({ troops, towers, spells = null, deck = null, difficul
   const byId = new Map(CHARACTERS.map((c) => [c.id, c]));
   // An empty or unknown deck falls back to the full roster rather than giving
   // the bot an empty hand - a bot that can never act is the old bug again.
-  const hand = (deck && deck.length ? deck : CHARACTERS.map((c) => c.id))
+  // An empty or unknown deck falls back to the full roster rather than giving
+  // the bot an empty hand - a bot that can never act is the old bug again.
+  // setStage() replaces this with the campaign mirror per stage.
+  let hand = (deck && deck.length ? deck : CHARACTERS.map((c) => c.id))
     .filter((id) => byId.has(id) && CARDS[id]);
 
   const myKing = towers.find((t) => t.side === 'enemy' && t.kind === 'king');
 
   let level = LEVELS[difficulty] || LEVELS.normal;
   let levelKey = LEVELS[difficulty] ? difficulty : 'normal';
+  // The behaviour knobs actually in play. Default to the tier's own table;
+  // setStage() replaces them with the campaign row, which sharpens every
+  // stage over the previous one.
+  let knobs = level;
+  let stageNum = 0;
   let elixir = ELIXIR_MAX / 2;
-  let thinkIn = rand(level.think[0], level.think[1]);
+  let elixirRate = 1; // stage scaling; 1 keeps the bot on the player's income
+  let thinkIn = rand(knobs.think[0], knobs.think[1]);
   let live = false;
+  let sinceDeploy = 0;   // seconds since a card actually reached the field
+  let matchT = 0;        // seconds since start()
+  let deployedCount = 0; // cards this match that actually reached the field
 
   // ── rules ────────────────────────────────────────────────────────────────
   /** May the bot drop a troop here? The mirror of the player's legal(). */
@@ -177,8 +200,39 @@ export function createBot({ troops, towers, spells = null, deck = null, difficul
     const t = troops.spawn(card, spot.x, spot.z, 'enemy');
     if (!t) return false;
     elixir -= cost;
+    sinceDeploy = 0;
+    deployedCount += 1;
     if (onDeploy) onDeploy(id, spot.x, spot.z);
     return true;
+  }
+
+  /** The cheapest unit (never a spell) the hand can currently afford. */
+  function cheapestTroopId() {
+    let best = null;
+    for (const id of hand) {
+      const c = CARDS[id];
+      if (!c || c.spell) continue;
+      if (best === null || c.cost < CARDS[best].cost) best = id;
+    }
+    return best;
+  }
+
+  /**
+   * The presence guarantee, checked every frame. Before its first deploy the
+   * bot must put a fighter out within FIRST_DEPLOY_BY; afterwards the silence
+   * between deployments never exceeds FORCE_DEPLOY_EVERY. Past the deadline
+   * it spends on the cheapest unit it owns, in a random lane behind its own
+   * bank. This is what keeps an NPC on the board on every stage 1-15.
+   */
+  function enforcePresence() {
+    const wait = deployedCount === 0 ? FIRST_DEPLOY_BY : FORCE_DEPLOY_EVERY;
+    if (sinceDeploy < wait) return;
+    const id = cheapestTroopId();
+    if (!id) return;
+    const lane = ARENA.laneX[Math.floor(Math.random() * ARENA.laneX.length)];
+    if (play(id, lane + rand(-1.5, 1.5), -(ARENA.river.halfL + rand(1.0, 2.6)), true)) {
+      sinceDeploy = 0;
+    }
   }
 
   // ── reading the board ────────────────────────────────────────────────────
@@ -318,7 +372,7 @@ export function createBot({ troops, towers, spells = null, deck = null, difficul
       // A card that dies in one hit is worthless against a tank, whatever its
       // damage says on paper.
       if (ts.dps > s.hp * 0.5) score -= 3;
-      score += rand(0, level.jitter);
+      score += rand(0, knobs.jitter);
       if (score > bestScore) { bestScore = score; best = id; }
     }
     return best;
@@ -341,7 +395,7 @@ export function createBot({ troops, towers, spells = null, deck = null, difficul
       // on the field is not doing anything.
       if (elixir >= 7 && s.cost >= 4) score += 2;
       if (s.range < 1.5) score += 1; // melee holds a lane, ranged does not
-      score += rand(0, level.jitter);
+      score += rand(0, knobs.jitter);
       if (score > bestScore) { bestScore = score; best = id; }
     }
     return best;
@@ -355,7 +409,7 @@ export function createBot({ troops, towers, spells = null, deck = null, difficul
     // already there when the attacker arrives and never has to out-run it.
     // Clamped past the bridge so the intended point is always on legal ground;
     // findSpot then only has to solve the river, never the back line.
-    const x = threat.x + rand(-level.jitter, level.jitter);
+    const x = threat.x + rand(-knobs.jitter, knobs.jitter);
     const z = Math.min(DEFEND_MIN_Z, threat.z - rand(1.2, 2.6));
     return play(id, x, z, true);
   }
@@ -380,10 +434,10 @@ export function createBot({ troops, towers, spells = null, deck = null, difficul
       // Answer the most advanced threat. A lower-level bot sometimes just lets
       // one walk through, which is the most human-looking flaw an opponent can
       // have and costs it nothing in fairness.
-      if (Math.random() < level.answer) defend(list[0]);
+      if (Math.random() < knobs.answer) defend(list[0]);
       return;
     }
-    if (elixir >= level.pushAt || (elixir >= 5 && Math.random() < level.commit)) {
+    if (elixir >= knobs.pushAt || (elixir >= 5 && Math.random() < knobs.commit)) {
       push();
     }
   }
@@ -393,10 +447,13 @@ export function createBot({ troops, towers, spells = null, deck = null, difficul
     /** Advance the clock. dt only; the bot never reads a frame directly. */
     update(dt) {
       if (!live) return;
-      elixir = Math.min(ELIXIR_MAX, elixir + dt / ELIXIR_PERIOD);
+      matchT += dt;
+      sinceDeploy += dt;
+      elixir = Math.min(ELIXIR_MAX, elixir + (dt / ELIXIR_PERIOD) * elixirRate);
+      enforcePresence();
       thinkIn -= dt;
       if (thinkIn > 0) return;
-      thinkIn = rand(level.think[0], level.think[1]);
+      thinkIn = rand(knobs.think[0], knobs.think[1]);
       decide();
     },
 
@@ -404,6 +461,9 @@ export function createBot({ troops, towers, spells = null, deck = null, difficul
     start() {
       elixir = ELIXIR_MAX / 2;
       thinkIn = rand(1.2, 2.2);
+      sinceDeploy = 0;
+      matchT = 0;
+      deployedCount = 0;
       live = true;
     },
 
@@ -420,10 +480,51 @@ export function createBot({ troops, towers, spells = null, deck = null, difficul
       if (!LEVELS[next]) return;
       levelKey = next;
       level = LEVELS[next];
+      if (!stageNum) knobs = level;
+    },
+
+    /**
+     * Arm the bot for a campaign stage. One call does three things:
+     *
+     * 1. Behaviour: the stage row's `bot` knobs replace the tier table, so a
+     *    stage plays measurably sharper than the one before it - faster
+     *    decisions, better placement, more reliable answers, earlier pushes.
+     * 2. Income: the row's elixir multiplier.
+     * 3. Deck: the bot's hand mirrors the player's unlock ladder - a card
+     *    joins the rival's hand once its gate stage is reached (the same
+     *    STAGE_UNLOCKS table the lobby reads). Early stages the rival fights
+     *    with a small cheap hand; by stage 11 it brings everything, spells
+     *    included.
+     */
+    setStage(cfg) {
+      if (!cfg) return;
+      stageNum = cfg.stage || stageNum;
+      this.setDifficulty(cfg.botLevel);
+      this.setElixirRate(cfg.elixir);
+      if (cfg.bot && cfg.bot.think) knobs = cfg.bot;
+      hand = CHARACTERS
+        .map((c) => c.id)
+        .filter((id) => byId.has(id) && CARDS[id] && (STAGE_UNLOCKS[id] ?? 0) <= stageNum);
+    },
+
+    /**
+     * Scale the rival's elixir income. The bot still fills the same 10-drop
+     * bar and reads the same card costs, but a late-stage opponent regenerating
+     * 1.9x is the difference between answering one push and answering three.
+     * Clamped so a typo in the stage table cannot give the bot infinite elixir.
+     */
+    setElixirRate(mult) {
+      elixirRate = Number.isFinite(mult) ? Math.max(0.25, Math.min(3, mult)) : 1;
     },
 
     get elixir() { return elixir; },
     get difficulty() { return levelKey; },
     get isLive() { return live; },
+    get hand() { return hand.slice(); },
+    get stage() { return stageNum; },
+    // Probe surface for the presence guarantee.
+    get sinceDeploy() { return sinceDeploy; },
+    get matchT() { return matchT; },
+    get knobs() { return knobs; },
   };
 }

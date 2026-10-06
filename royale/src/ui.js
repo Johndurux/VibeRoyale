@@ -351,7 +351,7 @@ const POP_HEIGHT = { king: 8.6, small: 6.4 };
  *   outcome is decided. main.js uses it to stop the bot and to choose the
  *   victory or defeat cue, so the HUD never needs to know what audio is.
  */
-export function createUI({ towerKit, camera, onCardPick, onResult }) {
+export function createUI({ towerKit, camera, onCardPick, onResult, onMenu }) {
   // Kept as variables, not arguments, because the lobby hands the deck over
   // after this returns: the lobby owns the pre-match screen and resolves the
   // hand when the player presses start, which is after boot. setDeck() then
@@ -382,11 +382,19 @@ export function createUI({ towerKit, camera, onCardPick, onResult }) {
   const elixirFill = document.getElementById('elixirFill');
   const elixirNum = document.getElementById('elixirNum');
   const fx = document.getElementById('fx');
+  const stageBadge = document.getElementById('stageBadge');
+  const stageNum = document.getElementById('stageNum');
   const result = document.getElementById('result');
   const resultTitle = document.getElementById('resultTitle');
   const resultSub = document.getElementById('resultSub');
   const btnPlayAgain = document.getElementById('btnPlayAgain');
   const btnChangeDeck = document.getElementById('btnChangeDeck');
+  const btnMenu = document.getElementById('btnMenu');
+  if (btnMenu && typeof onMenu === 'function') {
+    // The way out of a live match: leave for the lobby (and its stage grid)
+    // without settling anything. main.js decides what leaving means.
+    btnMenu.addEventListener('click', () => onMenu());
+  }
 
   let currentPlayAgain = null;
   let currentChangeDeck = null;
@@ -449,6 +457,19 @@ export function createUI({ towerKit, camera, onCardPick, onResult }) {
   }
 
   /**
+   * The campaign badge above the board. Hidden for 0/undefined, so a mode
+   * without a stage (free play, a probe) leaves the HUD clean instead of
+   * showing a stale number.
+   * @param {number} [n]
+   */
+  function setStage(n) {
+    if (!stageBadge) return;
+    const show = Number.isFinite(n) && n >= 1;
+    stageBadge.style.display = show ? '' : 'none';
+    if (show && stageNum) stageNum.textContent = String(n);
+  }
+
+  /**
    * Reset the HUD result screen, confetti, and settled flag for a new match.
    */
   function reset() {
@@ -459,6 +480,8 @@ export function createUI({ towerKit, camera, onCardPick, onResult }) {
       result.classList.remove('on', 'lose');
       result.querySelectorAll('.confetti').forEach((c) => c.remove());
     }
+    if (btnPlayAgain) btnPlayAgain.textContent = 'PLAY AGAIN';
+    setStage(0);
     elixir = ELIXIR_MAX / 2;
     elixirShown = -1;
     elixirFillShown = -1;
@@ -483,6 +506,15 @@ export function createUI({ towerKit, camera, onCardPick, onResult }) {
       if (typeof data.onPlayAgain === 'function') currentPlayAgain = data.onPlayAgain;
       if (typeof data.onChangeDeck === 'function') currentChangeDeck = data.onChangeDeck;
     }
+    // The campaign continuation: a won stage with a next one turns the primary
+    // button into NEXT STAGE, so a run goes 1 -> 2 -> ... -> 15 without a
+    // lobby detour. A loss (or the end of the campaign) keeps PLAY AGAIN.
+    if (won && data && typeof data.onNextStage === 'function') {
+      currentPlayAgain = data.onNextStage;
+      if (btnPlayAgain) btnPlayAgain.textContent = 'NEXT STAGE \u25B6';
+    } else if (btnPlayAgain) {
+      btnPlayAgain.textContent = 'PLAY AGAIN';
+    }
     if (settled) return;
     settled = true;
     // Reported before the overlay is built, so main.js can stop the bot and
@@ -490,7 +522,12 @@ export function createUI({ towerKit, camera, onCardPick, onResult }) {
     if (onResult) onResult(won);
     result.classList.toggle('lose', !won);
     resultTitle.textContent = won ? 'VICTORY' : 'DEFEAT';
-    resultSub.textContent = won ? 'RIVAL KING TOWER DOWN' : 'YOUR KING TOWER FELL';
+    // A stage match says which stage it was: the cleared number on a win (the
+    // lobby already shows the next one open), the plain fall line on a loss.
+    const st = data && data.stage;
+    resultSub.textContent = won
+      ? (st ? 'STAGE ' + st + ' CLEARED' : 'RIVAL KING TOWER DOWN')
+      : 'YOUR KING TOWER FELL';
     const cols = ['#FFC94A', '#FFE9A8', '#6FCF3E', '#6FC7F0', '#FF9AD5', '#FFFFFF'];
     for (let i = 0; i < 90; i++) {
       const bit = document.createElement('i');
@@ -640,6 +677,7 @@ export function createUI({ towerKit, camera, onCardPick, onResult }) {
   return {
     update,
     setDeck,
+    setStage,
     popDamage,
     popDamageAt,
     showResult,

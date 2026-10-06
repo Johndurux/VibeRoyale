@@ -190,19 +190,19 @@ console.log('\nlobby: a locked card cannot enter the deck');
   ok('the deck still holds nothing locked', l.deck.every((id) => progression.isUnlocked(id)));
 }
 
-console.log('\nlobby: the padlock names the level that opens the card');
+console.log('\nlobby: the padlock names the stage that opens the card');
 {
   localStorage.clear();
   progression.reset();
   const l = mk();
   const lockedCards = cards().filter(isLocked);
-  ok('the padlock markup carries a LVL label',
-    lockedCards.every((c) => /LVL \d+/.test(c.innerHTML)));
-  // The printed level must be the one progression says, not a hardcoded guess.
-  // Every locked card's markup should contain a number > 1, since nothing is
-  // locked at level 1 under the ladder.
-  const printed = lockedCards.map((c) => /LVL (\d+)/.exec(c.innerHTML)).filter(Boolean).map((m) => +m[1]);
-  ok('the printed level is above level 1 for every locked card', printed.length > 0 && printed.every((n) => n >= 2));
+  ok('the padlock markup carries a STAGE label',
+    lockedCards.every((c) => /STAGE \d+/.test(c.innerHTML)));
+  // The printed stage must be the one progression says, not a hardcoded guess.
+  // Gate 1 is legitimate: clearing stage 1 grants TUX, so a fresh career's
+  // locked cards read STAGE 1 and up.
+  const printed = lockedCards.map((c) => /STAGE (\d+)/.exec(c.innerHTML)).filter(Boolean).map((m) => +m[1]);
+  ok('the printed stage is a real campaign stage for every locked card', printed.length > 0 && printed.every((n) => n >= 1 && n <= 15));
 }
 
 console.log('\nlobby: the career strip reads real progression state');

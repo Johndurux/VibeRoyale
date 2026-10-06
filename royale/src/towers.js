@@ -298,6 +298,9 @@ function makeTower(kind, x, z, side) {
   const tower = {
     kind, side, x, z,
     mesh: g, cv, tex, maxHp, hp: maxHp,
+    // The unscaled campaign HP. Stage scaling rewrites maxHp from this base,
+    // so a later match can scale down again without compounding drift.
+    baseHp: maxHp,
     glitch: 0, seed: 0,
     destroyed: false,
     wrecked: false,
@@ -589,5 +592,25 @@ export function buildTowers() {
     }
   }
 
-  return { root, towers, update, reset, damageTower };
+  /**
+   * Scale one side's tower HP from the unscaled campaign base. Called by
+   * main.js right after reset() on every match start, so the multiplier is
+   * recomputed from baseHp each time and can never compound across matches -
+   * a 1.7x stage followed by a 0.9x stage lands back under 1.0, not above it.
+   *
+   * Only ever aimed at the enemy side by the game; the player's towers read
+   * their usual table, because a difficulty system must not weaken the player.
+   * @param {string} side 'player' or 'enemy'
+   * @param {number} mult HP multiplier, 1 = the raw table
+   */
+  function setSideHpScale(side, mult) {
+    const m = Number.isFinite(mult) && mult > 0 ? mult : 1;
+    for (const t of towers) {
+      if (t.side !== side) continue;
+      t.maxHp = Math.max(1, Math.round(t.baseHp * m));
+      if (!t.destroyed) t.hp = t.maxHp;
+    }
+  }
+
+  return { root, towers, update, reset, damageTower, setSideHpScale };
 }

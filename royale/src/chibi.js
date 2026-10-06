@@ -559,6 +559,10 @@ export function buildChibi(id) {
   if (config.accessoryVoxels) headDefs.push(...config.accessoryVoxels);
   if (!config.customEyes) headDefs.push(...eyeDefs(config));
   headGroup.add(buildPart(headDefs, base, isGhost));
+  // Rest pose, so the animator can bob/tilt the head around where the chibi
+  // layout actually put it instead of re-hardcoding 1.95 in troops.js.
+  headGroup.userData.baseY = headGroup.position.y;
+  headGroup.userData.baseZ = headGroup.position.z;
   root.add(headGroup);
 
   // Arms. Pivot height 1.34 is VibeOffice's shoulder line; weapons from the
@@ -576,11 +580,13 @@ export function buildChibi(id) {
   armL.position.set(-0.80, 1.34, 0);
   armL.rotation.z = 0.08;
   armL.add(buildPart(armDefsL, base, isGhost));
+  armL.userData.restZ = 0.08;
 
   const armR = new THREE.Group();
   armR.position.set(0.80, 1.34, 0);
   armR.rotation.z = -0.08;
   armR.add(buildPart(armDefsR, base, isGhost));
+  armR.userData.restZ = -0.08;
   root.add(armL, armR);
 
   // Legs, pivoted at the hip so troops.js's walk swing rotates the whole

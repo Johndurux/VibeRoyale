@@ -25,6 +25,13 @@ const AGGRO = 6.5;
 // fighters rather than five models occupying the same cubic decimetre.
 const SEPARATION = 1.5;
 
+// Enemies keep a tighter body radius. Closing to fighting distance is not the
+// same as occupying the same tile - without this, two head-on fighters on a
+// narrow bridge interpenetrate and read as one model with two health bars.
+// Kept below every melee reach in CARDS (1.3 smallest), so a pair at this
+// radius is still inside its own swing and the fight never stalls.
+const ENEMY_SEPARATION = 1.0;
+
 // Tower padding. A troop stops this far short of a tower's centre instead of
 // walking into it: the king is a vault, not a post, and clipping the model into
 // the masonry looks like a bug even though the numbers are fine.
@@ -69,6 +76,24 @@ const FENCE_OUTER_X = 2.35; // Outer boundary of railings & posts
 const FENCE_SPAN_Z = 5.8;   // Length of bridge railing
 const RIVER_HALF_W = RIVER.halfW; // 2.9
 const RIVER_HALF_L = RIVER.halfL; // 5.2
+
+// The deck inside the railings is walkable out to BRIDGE_HALF_W, but a chibi
+// body is ~1 unit wide - a fighter centred at the legal edge puts half the
+// model on the railing and reads as standing ON the fence. While a unit is
+// within the bridge span its centre is held this far inside the deck, so
+// separation shoves can slide units to the planks' edge without ever letting
+// them stand on the posts.
+const BRIDGE_CORRIDOR = BRIDGE_HALF_W - 0.55;
+
+/** Hold a unit's centre on the planks while it is within the bridge span.
+ *  Only units already at/near the deck are pulled in - a fighter standing on
+ *  the grass bank beside the river (a left-lane deploy at x -6.2) must never
+ *  be yanked toward the centre just because it is inside the span's z band. */
+function clampToBridge(t) {
+  if (Math.abs(t.z) <= FENCE_SPAN_Z && Math.abs(t.x) <= BRIDGE_HALF_W) {
+    t.x = Math.max(-BRIDGE_CORRIDOR, Math.min(BRIDGE_CORRIDOR, t.x));
+  }
+}
 
 /**
  * Footprint check: tests if a coordinate is walkable.
@@ -343,6 +368,7 @@ function stepToward(t, tx, tz, dt) {
   const mz = ARENA.halfLength - 0.6;
   t.x = Math.max(-mx, Math.min(mx, nx));
   t.z = Math.max(-mz, Math.min(mz, nz));
+  clampToBridge(t);
   t.moving = true;
   // Face travel, not the target: a troop sidestepping around a friend should
   // not skate sideways while facing its enemy.
@@ -384,6 +410,21 @@ function strike(t, onHit) {
 export function buildTroops({ towers, vfx = null, audio = null, onHit = null, onTowerHit = null }) {
   const root = new THREE.Group();
   const troops = [];
+
+  // Stage scaling for the rival's fighters, set by main.js at match start.
+  // Only the enemy side is ever scaled - the multipliers are a difficulty
+  // system, and a difficulty system must not be able to weaken the player.
+  let enemyMods = null;
+
+  /**
+   * Apply per-stage stat multipliers to units spawned on the enemy side.
+   * @param {{hp?: number, dps?: number}|null} mods multipliers, 1 = none
+   */
+  function setEnemyMods(mods) {
+    enemyMods = mods && (mods.hp || mods.dps)
+      ? { hp: mods.hp || 1, dps: mods.dps || 1 }
+      : null;
+  }
 
   function applyHit(t, tgt) {
     if (!tgt || t.dead) return;
@@ -464,7 +505,19 @@ export function buildTroops({ towers, vfx = null, audio = null, onHit = null, on
     if (!passable(x, z)) return null;
     if (troops.filter((t) => !t.dead).length >= MAX_TROOPS) return null;
 
-    const t = makeTroop(card, stats, x, z, side);
+    // Stage scaling lands here: the enemy's copy of the card stats is scaled
+    // once at spawn, so every downstream reader (combat, health bar, HUD) sees
+    // one consistent fighter. The player's units always read the raw table.
+    let effective = stats;
+    if (side === 'enemy' && enemyMods && (enemyMods.hp !== 1 || enemyMods.dps !== 1)) {
+      effective = {
+        ...stats,
+        hp: Math.max(1, Math.round(stats.hp * enemyMods.hp)),
+        dps: stats.dps * enemyMods.dps,
+      };
+    }
+
+    const t = makeTroop(card, effective, x, z, side);
     troops.push(t);
     root.add(t.root);
     return t;
@@ -483,6 +536,28 @@ export function buildTroops({ towers, vfx = null, audio = null, onHit = null, on
     const s = Math.min(1, dt * 10);
     if (t.model.legL) t.model.legL.rotation.x += (STANCE.legL - t.model.legL.rotation.x) * s;
     if (t.model.legR) t.model.legR.rotation.x += (STANCE.legR - t.model.legR.rotation.x) * s;
+  }
+
+  /**
+   * Ease an arm's sideways angle back to its chibi rest pose. Rest values live
+   * on the model (userData.restZ), so troops.js never re-hardcodes the layout.
+   */
+  function armZ(g, target, dt) {
+    if (!g) return;
+    const rest = g.userData.restZ || 0;
+    g.rotation.z += ((rest + target) - g.rotation.z) * Math.min(1, dt * 8);
+  }
+
+  /** Head helpers: the chibi head is ~40% of the silhouette, so a frozen
+   * head reads as a frozen fighter. bob/sway while walking, tilt into combat,
+   * ease back to the layout rest pose when nothing is happening. */
+  function headPose(t, { bob = 0, sway = 0, pitch = 0 } = {}, dt) {
+    const head = t.model.head;
+    if (!head) return;
+    const s = Math.min(1, dt * 8);
+    head.position.y = (head.userData.baseY || 0) + bob;
+    head.rotation.z += (sway - head.rotation.z) * s;
+    head.rotation.x += (pitch - head.rotation.x) * s;
   }
 
   /**
@@ -534,6 +609,9 @@ export function buildTroops({ towers, vfx = null, audio = null, onHit = null, on
         t.mesh.rotation.x = mix(from.meshRx, -0.14);
       }
       stance(t, dt);
+      armZ(t.model.armL, 0, dt);
+      armZ(t.model.armR, 0, dt);
+      headPose(t, { pitch: -0.07 }, dt); // eyes narrow up at the raised weapon
       t.mesh.position.y = 0;
     } else if (t.lunge > 0) {
       // k moves from 0 (hit lands) to 1 (recovery done). Each weapon gets its
@@ -572,6 +650,9 @@ export function buildTroops({ towers, vfx = null, audio = null, onHit = null, on
         t.mesh.rotation.x = 0.26 * settle;
       }
       stance(t, dt);
+      armZ(t.model.armL, 0, dt);
+      armZ(t.model.armR, 0, dt);
+      headPose(t, { pitch: 0.06 }, dt); // head dips into the strike
       t.mesh.position.y = 0;
     } else if (t.moving) {
       t.walk += dt * t.stats.speed * 3.4;
@@ -583,8 +664,16 @@ export function buildTroops({ towers, vfx = null, audio = null, onHit = null, on
         t.model.armR.rotation.x = swing * 0.7;
         t.model.armR.position.z = 0;
       }
-      t.mesh.rotation.x = 0;
-      t.mesh.position.y = 0;
+      // Arms flare out from the body as they swing - a chibi with limbs glued
+      // to the torso slides; one with volume bounces.
+      armZ(t.model.armL, Math.abs(swing) * 0.1, dt);
+      armZ(t.model.armR, -Math.abs(swing) * 0.1, dt);
+      // Two hops per stride cycle, synced to the legs, plus a slight forward
+      // lean. Short chibi legs at this frequency without bounce read as
+      // skating across the grass.
+      t.mesh.position.y = Math.abs(Math.sin(t.walk)) * 0.09;
+      t.mesh.rotation.x = 0.07;
+      headPose(t, { bob: Math.sin(t.walk * 2) * 0.035, sway: Math.sin(t.walk) * 0.05, pitch: 0.03 }, dt);
     } else {
       // Ease limbs and mesh back to neutral when not moving or lunging, then
       // breathe: a slow chest bob plus a faint arm sway, so a fighter holding
@@ -597,12 +686,15 @@ export function buildTroops({ towers, vfx = null, audio = null, onHit = null, on
       };
       ease(t.model.legL); ease(t.model.legR);
       ease(t.model.armL); ease(t.model.armR);
+      armZ(t.model.armL, 0, dt);
+      armZ(t.model.armR, 0, dt);
       t.mesh.rotation.x *= Math.max(0, 1 - dt * 10);
 
       t.breath += dt * 2.4;
       t.mesh.position.y = Math.sin(t.breath) * 0.035;
       if (t.model.armL) t.model.armL.rotation.x += Math.sin(t.breath) * 0.04;
       if (t.model.armR) t.model.armR.rotation.x += Math.sin(t.breath * 0.9) * 0.04;
+      headPose(t, { bob: Math.sin(t.breath) * 0.012 }, dt);
     }
 
     t.root.position.set(t.x, 0, t.z);
@@ -612,6 +704,11 @@ export function buildTroops({ towers, vfx = null, audio = null, onHit = null, on
     while (d > Math.PI) d -= Math.PI * 2;
     while (d < -Math.PI) d += Math.PI * 2;
     t.root.rotation.y += d * Math.min(1, dt * 12);
+    // Bank into the turn: tilt proportional to how hard the body is currently
+    // rotating, eased. A chibi that pivots bolt-upright reads as a figurine on
+    // a turntable; a small roll makes the turn a movement.
+    const bankTarget = THREE.MathUtils.clamp(-d * 0.55, -0.14, 0.14);
+    t.mesh.rotation.z += (bankTarget - t.mesh.rotation.z) * Math.min(1, dt * 8);
 
     // Spawn-in squash, and the attack recoil sliding the model forward.
     if (t.born < 1) {
@@ -721,22 +818,25 @@ export function buildTroops({ towers, vfx = null, audio = null, onHit = null, on
     }
 
     // Soft separation, applied after everyone has moved so the result does not
-    // depend on iteration order. Friends only: enemies are meant to close.
+    // depend on iteration order. Friends hold a wide formation; enemies hold a
+    // tighter one - close enough to fight, never close enough to share a tile.
     for (let i = 0; i < troops.length; i++) {
       const a = troops[i];
       if (a.dead) continue;
       for (let j = i + 1; j < troops.length; j++) {
         const b = troops[j];
-        if (b.dead || b.side !== a.side) continue;
+        if (b.dead) continue;
+        const friends = b.side === a.side;
+        const min = friends ? SEPARATION : ENEMY_SEPARATION;
         const dx = b.x - a.x;
         const dz = b.z - a.z;
         const d = Math.hypot(dx, dz);
-        if (d >= SEPARATION) continue;
+        if (d >= min) continue;
         if (d < 1e-4) {
           if (passable(b.x + 0.05, b.z)) b.x += 0.05;
           continue;
         }
-        const push = (SEPARATION - d) * 0.5;
+        const push = (min - d) * 0.5;
         const ux = dx / d;
         const uz = dz / d;
 
@@ -753,6 +853,11 @@ export function buildTroops({ towers, vfx = null, audio = null, onHit = null, on
         else if (passable(bx, b.z)) { b.x = bx; }
         else if (passable(b.x, bz)) { b.z = bz; }
       }
+    }
+    // Separation can slide a fighter to the deck's legal edge, where the
+    // railing starts; the corridor clamp pulls the body back onto the planks.
+    for (const t of troops) {
+      if (!t.dead) clampToBridge(t);
     }
   }
 
@@ -868,6 +973,7 @@ export function buildTroops({ towers, vfx = null, audio = null, onHit = null, on
     blast,
     freezeArea,
     inRadius,
+    setEnemyMods,
     MAX_TROOPS,
   };
 }

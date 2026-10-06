@@ -1,13 +1,14 @@
 // ── progression.js ─────────────────────────────────────────────────────────
-// The career that lives in localStorage: XP, level, card unlocks and win
-// streak. It touches no DOM, so the lobby, the result screen and the audio
-// layer can each read it without importing each other, and the arithmetic can
-// be reasoned about on its own.
+// The career that lives in localStorage: XP, level, stage clears, card
+// unlocks and win streak. It touches no DOM, so the lobby, the result screen
+// and the audio layer can each read it without importing each other, and the
+// arithmetic can be reasoned about on its own.
 //
-// It does import CHARACTERS, because roster order IS the unlock ladder: a
-// card's unlock level is a function of where it sits in the cast. Deriving it
-// from a private copy of that list would let the lobby print "LVL 3" on a card
-// that actually opened at level 4.
+// Card unlocks are stage-gated: a card opens when the player clears the stage
+// STAGE_UNLOCKS names for it, not when an XP level ticks over. XP and level
+// still exist - they are the score and the result screen's progress bar - but
+// they gate nothing, so a player who grinds free matches cannot out-level the
+// campaign.
 //
 // Every read and write is wrapped. Private browsing, a locked-down enterprise
 // profile and a full quota all throw on localStorage access, and a progression
@@ -15,12 +16,7 @@
 // with it. The module keeps an in-memory copy and simply stops persisting when
 // the browser says no, so the game plays exactly the same with storage off.
 
-import { PROGRESS, UNLOCKS, CARDS } from './config.js';
-// The roster order is what the unlock ladder walks, so progression has to see
-// the same CHARACTERS array the lobby and the HUD read. One list, one order -
-// if the ladder were computed from a private copy, "LVL 3" on a card and the
-// card actually opening at level 3 would be two different statements.
-import { CHARACTERS } from './characters.js';
+import { PROGRESS, STAGES, STAGE_UNLOCKS, CARDS } from './config.js';
 
 // The save shape. Kept flat and primitive so a corrupt or partial record
 // cannot produce a value that breaks arithmetic further down.
@@ -28,6 +24,7 @@ function blank() {
   return {
     xp: 0,
     level: 1,
+    stage: 0,        // highest stage cleared; 0 means the campaign is virgin
     wins: 0,
     losses: 0,
     totalDamageDealt: 0,
@@ -59,6 +56,7 @@ try {
       mem = {
         xp: num(parsed.xp, b.xp),
         level: Math.max(1, num(parsed.level, b.level)),
+        stage: num(parsed.stage, b.stage),
         wins: num(parsed.wins),
         losses: num(parsed.losses),
         totalDamageDealt: num(parsed.totalDamageDealt),
@@ -129,58 +127,39 @@ export function levelForXp(xp) {
 }
 
 /**
- * The unlock order: the sequence cards actually open in.
+ * The stage that must be CLEARED to open a card; 0 = free from the start.
  *
- * Deliberately NOT roster order. The cast is arranged for variety, so walking
- * it in order would hand a new player the 5-cost legendary ARMOR as a free
- * card and gate MR. HAT, the cheapest thing in the game. Sorting by elixir
- * cost is the rule the brief asks for - "the cheapest/most basic ones" - and
- * spells sort last on purpose, because a free 4-cost AoE blast would delete
- * the learning curve rather than flatten it. Ties keep roster order, so the
- * sequence is stable between sessions.
- *
- * Built once at module load: it is a pure function of a constant roster, and
- * recomputing it per card per render would be work done to produce the same
- * array every time.
- * @type {string[]}
- */
-const UNLOCK_ORDER = CHARACTERS
-  .map((c, i) => ({ id: c.id, i, spell: !!CARDS[c.id]?.spell, cost: CARDS[c.id]?.cost ?? 99 }))
-  .sort((a, b) => (a.spell - b.spell) || (a.cost - b.cost) || (a.i - b.i))
-  .map((c) => c.id);
-
-// position of each id within the unlock sequence
-const UNLOCK_RANK = new Map(UNLOCK_ORDER.map((id, i) => [id, i]));
-
-/**
- * The level a card opens at. The first UNLOCKS.free are available from the
- * start; the rest climb the ladder in UNLOCK_ORDER.
- *
- * Past the end of the ladder, the final level repeats: the ladder is sized for
- * a known roster, and if a future card is added the alternative is for it to
- * be permanently unreachable, which is a far worse failure than it opening
- * at the same level as the last one.
- *
+ * STAGE_UNLOCKS in config.js is the whole table: a gate of 1 means winning
+ * stage 1 grants the card, a gate of 7 means winning stage 7 does. A card
+ * missing from it is 0 - free on purpose rather than locked by accident, so
+ * adding a casual card never requires touching progression. An id that is not
+ * on the roster at all still answers 0 here; `isUnlocked` is the gate that
+ * rejects unknown ids, and keeping this function total means a typo prints a
+ * padlock instead of crashing the lobby.
  * @param {string} id character id
- * @returns {number} 1 for the free cards
+ * @returns {number} the stage whose clear grants the card, 0 = free
  */
-export function unlockLevelFor(id) {
-  const rank = UNLOCK_RANK.get(id);
-  if (rank === undefined) return 1;
-  if (rank < UNLOCKS.free) return 1;
-  const step = rank - UNLOCKS.free;
-  return UNLOCKS.ladder[Math.min(step, UNLOCKS.ladder.length - 1)];
+export function unlockStageFor(id) {
+  return STAGE_UNLOCKS[id] ?? 0;
 }
 
 /**
- * Is a card available at the current level?
+ * Is a card available at this point in the campaign?
+ *
+ * Free cards (gate 0) are always true, including for a brand-new career with
+ * nothing cleared - the default deck has to be playable before stage 1 is
+ * won, not after. A gated card opens the moment its gate stage is cleared:
+ * clearing stage 1 grants TUX for the stage 2 attempt.
+ *
  * @param {string} id character id
- * @param {number} [level]
+ * @param {number} [cleared] override for the highest cleared stage
  * @returns {boolean}
  */
-export function isUnlocked(id, level = mem.level) {
-  if (!UNLOCK_RANK.has(id)) return false;
-  return unlockLevelFor(id) <= level;
+export function isUnlocked(id, cleared = mem.stage) {
+  if (!CARDS[id] && !STAGE_UNLOCKS[id]) return false;
+  const need = unlockStageFor(id);
+  if (need <= 0) return true;
+  return cleared >= need;
 }
 
 /**
@@ -191,15 +170,22 @@ export function isUnlocked(id, level = mem.level) {
  * the bonus for the streak it just started. A loss resets the streak and then
  * pays the participation XP, so a bad run is never a dead end.
  *
+ * Stage advances only in sequence: clearing stage N+1 banks it, replaying an
+ * older stage pays its repeat XP but moves nothing. A first clear pays the
+ * stage's full XP reward on top of the match XP; a repeat pays a quarter,
+ * because grinding an old stage should never out-earn moving forward.
+ *
  * @param {object} r
  * @param {boolean} r.won
- * @param {string} r.difficulty 'easy' | 'normal' | 'hard'
+ * @param {number} r.stage the stage that was played, 1-based
+ * @param {string} r.difficulty 'easy' | 'normal' | 'hard' - the stage's bot tier
  * @param {number} r.towersDestroyed
  * @param {number} r.damageDealt
  * @returns {object} a breakdown the result screen can print line by line
  */
-export function recordMatch({ won, difficulty, towersDestroyed = 0, damageDealt = 0 }) {
+export function recordMatch({ won, stage = 0, difficulty, towersDestroyed = 0, damageDealt = 0 }) {
   const previousLevel = mem.level;
+  const previousStage = mem.stage;
   const before = mem.streak;
 
   mem.matches += 1;
@@ -232,6 +218,21 @@ export function recordMatch({ won, difficulty, towersDestroyed = 0, damageDealt 
     total += streakBonus;
   }
 
+  // The campaign itself. Sequential advance only, and the stage reward rides
+  // on top of the match XP: a first clear is an event, a replay is a wage.
+  const cfg = STAGES[stage - 1];
+  let stageBonus = 0;
+  let stageCleared = false;
+  if (won && cfg && stage === previousStage + 1) {
+    mem.stage = stage;
+    stageCleared = true;
+    stageBonus = cfg.xp;
+    total += stageBonus;
+  } else if (won && cfg && stage <= previousStage) {
+    stageBonus = Math.round(cfg.xp / 4);
+    total += stageBonus;
+  }
+
   mem.xp += total;
   // Re-derive rather than incrementing: a level is what the XP says it is.
   mem.level = levelForXp(mem.xp);
@@ -242,13 +243,16 @@ export function recordMatch({ won, difficulty, towersDestroyed = 0, damageDealt 
     base,
     towerBonus,
     streakBonus,
+    stageBonus,
+    stageCleared,
+    clearedStage: mem.stage,
     total,
     level: mem.level,
     previousLevel,
     leveledUp,
     streak: mem.streak,
     tier,
-    unlocked: leveledUp ? newlyUnlocked(previousLevel, mem.level) : [],
+    unlocked: stageCleared ? newlyUnlocked(previousStage, mem.stage) : [],
   };
 }
 
@@ -264,19 +268,24 @@ export function streakTier(streak) {
 }
 
 /**
- * Which cards opened up between two levels, so a level-up says what it gave
- * you rather than just a number going up.
- * @param {number} from
- * @param {number} to
+ * Which cards opened up between two stage clears, so a cleared stage says
+ * what it gave you rather than just a number going up.
+ * @param {number} fromStage
+ * @param {number} toStage
  * @returns {string[]}
  */
-export function newlyUnlocked(from, to) {
+export function newlyUnlocked(fromStage, toStage) {
   const out = [];
-  for (const id of UNLOCK_ORDER) {
-    const need = unlockLevelFor(id);
-    if (need > from && need <= to) out.push(id);
+  for (const id of Object.keys(STAGE_UNLOCKS)) {
+    const need = STAGE_UNLOCKS[id];
+    if (need > fromStage && need <= toStage) out.push(id);
   }
-  return out;
+  // Roster order, so the result screen reads like the picker does.
+  return out.sort((a, b) => {
+    const ra = CARDS[a] ? 0 : 1;
+    const rb = CARDS[b] ? 0 : 1;
+    return ra - rb;
+  });
 }
 
 /**
@@ -320,6 +329,9 @@ export function snapshot() {
   return {
     xp: mem.xp,
     level,
+    stage: mem.stage,
+    nextStage: Math.min(mem.stage + 1, STAGES.length),
+    stagesTotal: STAGES.length,
     wins: mem.wins,
     losses: mem.losses,
     matches: mem.matches,

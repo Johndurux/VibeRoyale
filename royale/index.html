@@ -109,6 +109,12 @@
       padding: 5px 12px; box-shadow: var(--drop);
     }
     .tag b { color: #7A4B00; }
+    .menu-btn {
+      cursor: pointer; font-family: inherit;
+      transition: transform 110ms steps(2);
+    }
+    .menu-btn:hover { transform: translateY(-2px); }
+    .menu-btn:active { transform: translateY(1px); }
 
     /* -- tower banners ---------------------------------------------------
        A gold rim around a parchment face, with a swallow-tail notch cut into
@@ -647,7 +653,9 @@
         <div class="brand-mark"></div>
         <div class="brand-text">VIBEROYALE<span>THE ARENA</span></div>
       </div>
+      <div class="tag" id="stageBadge" style="display:none">STAGE <b id="stageNum">1</b></div>
       <div class="tag">PHASE <b>02</b> &middot; CARD PLAY</div>
+      <button type="button" class="tag menu-btn" id="btnMenu">MENU</button>
     </div>
 
     <div class="mid">
@@ -713,7 +721,7 @@
       <div class="lv-sub">Tap cards to swap them in. Your deck is the only hand you fight with.</div>
       <div id="lobbyPick" class="lv-pick"></div>
 
-      <div class="lv-title">RIVAL</div>
+      <div class="lv-title">CAMPAIGN</div>
       <div id="lobbyDiff" class="lv-diff"></div>
 
       <div class="lv-title">YOUR DECK</div>
