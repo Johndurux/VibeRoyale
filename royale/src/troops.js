@@ -80,13 +80,25 @@ const FENCE_SPAN_Z = 5.8;   // Length of bridge railing
 const RIVER_HALF_W = RIVER.halfW; // 2.9
 const RIVER_HALF_L = RIVER.halfL; // 5.2
 
+// A chibi's visual half-width. The walkable map pads the water by this much,
+// because a fighter's CENTRE is what pathing checks and half the model hangs
+// out from it - without the pad, a column walking the pool's edge reads as
+// wading through the blue.
+const WALK_MARGIN = 0.8;
+
 // The deck inside the railings is walkable out to BRIDGE_HALF_W, but a chibi
-// body is ~1 unit wide - a fighter centred at the legal edge puts half the
-// model on the railing and reads as standing ON the fence. While a unit is
-// within the bridge span its centre is held this far inside the deck, so
-// separation shoves can slide units to the planks' edge without ever letting
-// them stand on the posts.
-const BRIDGE_CORRIDOR = BRIDGE_HALF_W - 0.55;
+// body plus arms and headwear spans ~1.6 units on screen - a fighter centred
+// at the legal edge puts half the model on the railing or the water and reads
+// as standing ON the river. While a unit is within the bridge span its centre
+// is held this far inside the deck, so separation shoves can slide units
+// toward the planks' edge without the body ever visibly leaving the planks.
+const BRIDGE_CORRIDOR = BRIDGE_HALF_W - 0.8;
+
+// Personal space a marching body refuses to enter. Deliberately tighter than
+// both separation radii: this is not the formation rule, it is the hard floor
+// that stops a step from planting one model inside another before separation
+// has had its say.
+const BODY_BLOCK = 0.7;
 
 /** Hold a unit's centre on the planks while it is within the bridge span.
  *  Only units already at/near the deck are pulled in - a fighter standing on
@@ -102,8 +114,10 @@ function clampToBridge(t) {
  * Footprint check: tests if a coordinate is walkable.
  * - Bridge deck (|x| <= 1.95, |z| <= 5.8) is WALKABLE.
  * - Bridge railings & posts (1.95 < |x| <= 2.35, |z| <= 5.8) are IMPASSABLE.
- * - River water (1.95 < |x| < 2.9, |z| < 5.2) is IMPASSABLE.
- * - Side grass banks (|x| >= 2.9) and end fields (|z| >= 5.2) are WALKABLE.
+ * - River water (1.95 < |x| < 3.7, |z| < 6.0) is IMPASSABLE - the wet zone
+ *   plus a body-width margin, so a walker's centre never rides the waterline
+ *   with half the model over the blue.
+ * - Side grass banks (|x| >= 3.7) and end fields (|z| >= 6.0) are WALKABLE.
  * @param {number} x
  * @param {number} z
  * @returns {boolean}
@@ -117,9 +131,11 @@ export function passable(x, z) {
     return false;
   }
 
-  // 2. River water collision
-  if (az < RIVER_HALF_L) {
-    if (ax > BRIDGE_HALF_W && ax < RIVER_HALF_W) {
+  // 2. River water collision, padded by a body width so nobody walks the
+  //    waterline. The bridge deck clears both checks on its own |x|, so the
+  //    planks stay walkable straight through the padded zone.
+  if (az < RIVER_HALF_L + WALK_MARGIN) {
+    if (ax > BRIDGE_HALF_W && ax < RIVER_HALF_W + WALK_MARGIN) {
       return false;
     }
   }
@@ -289,6 +305,34 @@ function pickTarget(t, troops, towers) {
 }
 
 /**
+ * Would planting this body at (nx, nz) merge it with another living fighter?
+ *
+ * Movement never asks this today, and the crowd pays for it: a column
+ * marching at one target grinds its rear rank into its front rank every
+ * frame, and the soft separation pass can only hold that line while there is
+ * room to push - on a narrow bridge there is not, so the crush reads as one
+ * merged model with several health bars. A queued unit simply stands still
+ * for the frame; separation spreads the line out and the march resumes.
+ *
+ * @param {object} t the mover
+ * @param {number} nx candidate x
+ * @param {number} nz candidate z
+ * @param {Array<object>} troops every troop, alive or not
+ * @returns {boolean}
+ */
+function bodyBlocked(t, nx, nz, troops) {
+  const r2 = BODY_BLOCK * BODY_BLOCK;
+  for (let i = 0; i < troops.length; i++) {
+    const o = troops[i];
+    if (o === t || o.dead) continue;
+    const dx = o.x - nx;
+    const dz = o.z - nz;
+    if (dx * dx + dz * dz < r2) return true;
+  }
+  return false;
+}
+
+/**
  * One step toward a point, refusing to enter the river.
  *
  * There is no pathfinder here and there does not need to be one: the river is
@@ -302,8 +346,9 @@ function pickTarget(t, troops, towers) {
  * @param {number} tx
  * @param {number} tz
  * @param {number} dt
+ * @param {Array<object>} [troops] the live roster, for body queuing
  */
-function stepToward(t, tx, tz, dt) {
+function stepToward(t, tx, tz, dt, troops) {
   const dx = tx - t.x;
   const dz = tz - t.z;
   const d = Math.hypot(dx, dz);
@@ -330,8 +375,9 @@ function stepToward(t, tx, tz, dt) {
         aimX = 0;
         aimZ = tz;
       }
-    } else if (Math.abs(t.x) < RIVER_HALF_W) {
-      // In center corridor approaching bridge from side: funnel cleanly through mouth
+    } else if (Math.abs(t.x) < RIVER_HALF_W + WALK_MARGIN) {
+      // In the water's padded approach zone beside the deck: funnel cleanly
+      // through the mouth instead of skirting the pool edge
       aimX = 0;
       aimZ = mouthZ;
     }
@@ -364,6 +410,15 @@ function stepToward(t, tx, tz, dt) {
         return;
       }
     }
+  }
+
+  // The queue: never plant this body inside another living fighter. The
+  // separation pass owns spacing once everyone has moved; this owns the half
+  // second where a marching column would otherwise walk straight through its
+  // own front rank.
+  if (troops && bodyBlocked(t, nx, nz, troops)) {
+    t.moving = false;
+    return;
   }
 
   // Safety clamp
@@ -812,7 +867,7 @@ export function buildTroops({ towers, vfx = null, audio = null, onHit = null, on
               t.attackTarget = tgt;
             }
           } else {
-            stepToward(t, tgt.ref.x, tgt.ref.z, dt);
+            stepToward(t, tgt.ref.x, tgt.ref.z, dt, troops);
           }
         }
       }
@@ -823,39 +878,49 @@ export function buildTroops({ towers, vfx = null, audio = null, onHit = null, on
     // Soft separation, applied after everyone has moved so the result does not
     // depend on iteration order. Friends hold a wide formation; enemies hold a
     // tighter one - close enough to fight, never close enough to share a tile.
-    for (let i = 0; i < troops.length; i++) {
-      const a = troops[i];
-      if (a.dead) continue;
-      for (let j = i + 1; j < troops.length; j++) {
-        const b = troops[j];
-        if (b.dead) continue;
-        const friends = b.side === a.side;
-        const min = friends ? SEPARATION : ENEMY_SEPARATION;
-        const dx = b.x - a.x;
-        const dz = b.z - a.z;
-        const d = Math.hypot(dx, dz);
-        if (d >= min) continue;
-        if (d < 1e-4) {
-          if (passable(b.x + 0.05, b.z)) b.x += 0.05;
-          continue;
+    // One relaxation pass cannot satisfy a crowd: four cards arriving at one
+    // narrow bridge mouth leave pairs that only settle once their neighbours
+    // have moved too, so the pass repeats while real overlap remains. Three
+    // passes cap the cost; whatever squeeze survives that is geometry, and the
+    // corridor clamp below keeps it on the planks.
+    for (let pass = 0; pass < 3; pass++) {
+      let worst = 0;
+      for (let i = 0; i < troops.length; i++) {
+        const a = troops[i];
+        if (a.dead) continue;
+        for (let j = i + 1; j < troops.length; j++) {
+          const b = troops[j];
+          if (b.dead) continue;
+          const friends = b.side === a.side;
+          const min = friends ? SEPARATION : ENEMY_SEPARATION;
+          const dx = b.x - a.x;
+          const dz = b.z - a.z;
+          const d = Math.hypot(dx, dz);
+          if (d >= min) continue;
+          worst = Math.max(worst, min - d);
+          if (d < 1e-4) {
+            if (passable(b.x + 0.05, b.z)) b.x += 0.05;
+            continue;
+          }
+          const push = (min - d) * 0.5;
+          const ux = dx / d;
+          const uz = dz / d;
+
+          const ax = a.x - ux * push;
+          const az = a.z - uz * push;
+          const bx = b.x + ux * push;
+          const bz = b.z + uz * push;
+
+          if (passable(ax, az)) { a.x = ax; a.z = az; }
+          else if (passable(ax, a.z)) { a.x = ax; }
+          else if (passable(a.x, az)) { a.z = az; }
+
+          if (passable(bx, bz)) { b.x = bx; b.z = bz; }
+          else if (passable(bx, b.z)) { b.x = bx; }
+          else if (passable(b.x, bz)) { b.z = bz; }
         }
-        const push = (min - d) * 0.5;
-        const ux = dx / d;
-        const uz = dz / d;
-
-        const ax = a.x - ux * push;
-        const az = a.z - uz * push;
-        const bx = b.x + ux * push;
-        const bz = b.z + uz * push;
-
-        if (passable(ax, az)) { a.x = ax; a.z = az; }
-        else if (passable(ax, a.z)) { a.x = ax; }
-        else if (passable(a.x, az)) { a.z = az; }
-
-        if (passable(bx, bz)) { b.x = bx; b.z = bz; }
-        else if (passable(bx, b.z)) { b.x = bx; }
-        else if (passable(b.x, bz)) { b.z = bz; }
       }
+      if (worst < 0.12) break;
     }
     // Separation can slide a fighter to the deck's legal edge, where the
     // railing starts; the corridor clamp pulls the body back onto the planks.
