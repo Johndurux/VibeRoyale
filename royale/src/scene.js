@@ -107,7 +107,18 @@ export const camera = new THREE.PerspectiveCamera(
 // destruction zoom-in has one authoritative place to return to, rather than
 // three modules each keeping their own copy of "where the camera normally is"
 // and drifting apart.
-export const CAM_ORIGIN = { x: 0, y: 24.5, z: 29.5, lookX: 0, lookY: 0, lookZ: -1.4 };
+//
+// The resting camera pose. Exported as a single object so a screen shake or a
+// destruction zoom-in has one authoritative place to return to, rather than
+// three modules each keeping their own copy of "where the camera normally is"
+// and drifting apart.
+//
+// The original angle and zoom, translated a few units toward the player side:
+// same pitch, same scale, but the bottom of the frame now clears the player
+// king tower instead of slicing it (its base used to land below the 16:9
+// bottom edge). The rival king was never at risk - the shallow pitch sees far
+// past it - so the composition reads exactly as it always did.
+export const CAM_ORIGIN = { x: 0, y: 24.5, z: 34.5, lookX: 0, lookY: 0, lookZ: 3.6 };
 camera.position.set(CAM_ORIGIN.x, CAM_ORIGIN.y, CAM_ORIGIN.z);
 camera.lookAt(CAM_ORIGIN.lookX, CAM_ORIGIN.lookY, CAM_ORIGIN.lookZ);
 

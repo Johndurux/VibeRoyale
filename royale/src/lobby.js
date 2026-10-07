@@ -340,13 +340,15 @@ export function createLobby({ audio, onStart, onMenu }) {
     }
     const hintEl = root.querySelector('.lv-hint') || document.querySelector('.lv-hint');
     if (hintEl) {
+      // The hint exists only to say why BATTLE is unready. The old idle line
+      // ("3 · 2 · 1 · GO") sat faintly under the button on every tab and read
+      // as a broken countdown; hidden is the honest idle state.
       if (!valid) {
         const needed = DECK_SIZE - deck.length;
         hintEl.textContent = 'CHOOSE ' + needed + ' MORE CARD' + (needed > 1 ? 'S' : '') + ' (4 REQUIRED)';
-        hintEl.style.color = '#D21E1E';
+        hintEl.style.display = 'block';
       } else {
-        hintEl.textContent = '3 · 2 · 1 · GO';
-        hintEl.style.color = '#7A5A28';
+        hintEl.style.display = 'none';
       }
     }
   }

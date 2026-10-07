@@ -12,8 +12,10 @@
        card, Bungee is blocky and loud enough to survive being stamped onto a
        tower inside a 3D scene. The towers' own HP screens are drawn in Bungee
        on a canvas, so the HUD and the screens it mirrors are visibly the same
-       instrument. -->
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Bungee&display=swap">
+       instrument. JetBrains Mono carries the small career stats: Bungee's
+       zero is close enough to an O that "0W · 0L" reads as "OW · OL", and a
+       mono's slashed zero makes the digits unambiguous. -->
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Bungee&family=JetBrains+Mono:wght@600;700&display=swap">
 
   <script type="importmap">
     {
@@ -57,6 +59,7 @@
 
       --font: 'Baloo 2', 'Trebuchet MS', system-ui, sans-serif;
       --font-num: 'Bungee', 'Baloo 2', 'Trebuchet MS', sans-serif;
+      --font-stat: 'JetBrains Mono', 'Consolas', monospace;
 
       /* The signature CR drop: a hard offset shadow under a gold rim. A soft
          blur is the clearest tell of a generated UI. */
@@ -80,14 +83,30 @@
     }
 
     .bar-top, .bar-bottom { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-    .bar-bottom { align-items: flex-end; }
+    /* The hand is the point of the bottom bar, so it sits dead-centre with the
+       elixir bar directly above it; the field tag floats to the left edge out
+       of the way. The bottom inset honours the phone home bar via safe-area. */
+    .bar-bottom {
+      align-items: flex-end; justify-content: center; position: relative;
+      padding-bottom: calc(6px + env(safe-area-inset-bottom, 0px));
+    }
+    .bar-bottom > .tag {
+      position: absolute; left: 0; bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    }
     .mid { flex: 1; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 
     /* -- wordmark -------------------------------------------------------- */
     .brand { display: flex; align-items: center; gap: 9px; }
     .brand-mark {
       width: 26px; height: 26px;
-      background: linear-gradient(160deg, var(--gold-hi), var(--vr-gold-border) 55%, var(--vr-gold-shadow));
+      /* The crown is the same mark the favicon carries, drawn as an inline SVG
+         over the gold gradient, so the square beside the wordmark reads as a
+         stamp instead of an empty box. */
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M4.5 16.5 L4.5 8.5 L9 12 L12 5.5 L15 12 L19.5 8.5 L19.5 16.5 Z M4.5 18 h15 v1.8 h-15 Z' fill='%233A2A12'/%3E%3C/svg%3E"),
+        linear-gradient(160deg, var(--gold-hi), var(--vr-gold-border) 55%, var(--vr-gold-shadow));
+      background-size: 18px 18px, 100% 100%;
+      background-position: center;
+      background-repeat: no-repeat;
       border: 2px solid var(--vr-font-outline); border-radius: 7px;
       box-shadow: var(--drop);
     }
@@ -209,7 +228,7 @@
        lift on the selected one. The rim is a second background layer clipped
        to the border box, which is how one element carries both a
        rarity-coloured rim and an opaque card face. */
-    .roster-wrap { display: flex; flex-direction: column; align-items: flex-end; gap: 7px; perspective: 700px; }
+    .roster-wrap { display: flex; flex-direction: column; align-items: center; gap: 7px; perspective: 700px; }
     #rosterHint {
       font-size: 10px; font-weight: 800; letter-spacing: 2px; color: var(--parchment);
       -webkit-text-stroke: 2.5px var(--vr-font-outline); paint-order: stroke fill;
@@ -220,7 +239,7 @@
       --c: var(--vr-rarity-common);
       --rim: var(--vr-rarity-common);
       position: relative;
-      width: 66px; padding: 4px 4px 6px;
+      width: 88px; padding: 4px 4px 6px;
       background:
         linear-gradient(180deg, #FFF6E2, #EBD3A4) padding-box,
         var(--rim) border-box;
@@ -236,10 +255,10 @@
       box-shadow: 0 10px 0 var(--vr-gold-shadow), 0 0 20px rgba(255, 201, 74, 0.7);
     }
     .chip:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
-    .chip-face { display: block; width: 50px; height: 50px; border: 2px solid var(--vr-font-outline); border-radius: 8px; overflow: hidden; }
-    .chip-face canvas { display: block; width: 50px; height: 50px; }
-    .chip-name { font-size: 9px; font-weight: 800; letter-spacing: 0.2px; line-height: 1.1; }
-    .chip-role { font-size: 7px; font-weight: 600; color: #7A5A28; line-height: 1.2; text-align: center; }
+    .chip-face { display: block; width: 64px; height: 64px; border: 2px solid var(--vr-font-outline); border-radius: 8px; overflow: hidden; }
+    .chip-face canvas { display: block; width: 64px; height: 64px; }
+    .chip-name { font-size: 11px; font-weight: 800; letter-spacing: 0.2px; line-height: 1.1; }
+    .chip-role { font-size: 8px; font-weight: 600; color: #7A5A28; line-height: 1.2; text-align: center; }
     .chip-cost {
       position: absolute; left: -6px; top: -6px;
       min-width: 18px; height: 18px; padding: 0 3px;
@@ -365,6 +384,11 @@
 
     .lv-panel {
       width: 720px; max-width: 100%;
+      /* Fit the viewport, whatever it is: the panel never grows past the screen
+         minus its own breathing room, so BATTLE stays fully on screen and the
+         page never grows a scrollbar - the lists inside scroll instead. */
+      max-height: calc(100dvh - 24px - env(safe-area-inset-bottom, 0px));
+      min-height: 0;
       display: flex; flex-direction: column; align-items: center; gap: 8px;
       padding: 14px 20px 18px;
       background: linear-gradient(180deg, var(--gold-hi), var(--vr-gold-border) 40%, var(--vr-gold-shadow));
@@ -385,9 +409,13 @@
     /* The picker row. Scrolls rather than wraps, so a nine-character cast
        never pushes the start button off the panel on a short window. */
     .lv-pick {
-      display: flex; gap: 6px; flex-wrap: wrap; justify-content: center;
-      max-width: 100%;
+      /* Four columns balances twelve cards into three even rows - the old
+         flex-wrap ran ten cards on row one and two stragglers on row two,
+         which shrank nothing and helped nobody. */
+      display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px; width: 100%; max-width: 360px;
     }
+    .lv-pick .lcard { width: auto; }
     .lv-deck { display: flex; gap: 8px; justify-content: center; min-height: 10px; }
 
     /* A lobby card is the HUD chip at a size you can actually read a stat off,
@@ -468,7 +496,8 @@
     .lv-xp {
       display: flex; justify-content: space-between; gap: 6px;
       margin-top: 3px;
-      font-family: var(--font-num); font-size: 8.5px; color: #7A5A28;
+      font-family: var(--font-stat); font-feature-settings: 'zero' 1;
+      font-size: 9px; color: #7A5A28;
       white-space: nowrap;
     }
     /* The streak line is cold and flat with no streak, so a flame that is not
@@ -494,16 +523,23 @@
        dimmed to sit behind the unlocked ones, never removed from layout. */
     .lcard.locked { cursor: not-allowed; filter: grayscale(0.85) brightness(0.72); }
     .lcard.locked:hover, .lcard.locked:focus-visible { transform: none; box-shadow: var(--lift); outline: none; }
+    /* The lock card: name and role stand down so the padlock owns the face -
+       icon centred, STAGE X on its own line under it, and the cost badge
+       stays lit above the veil. Nothing shares a baseline, so nothing can
+       ever overlap. */
+    .lcard.locked .lcard-name, .lcard.locked .lcard-role { visibility: hidden; }
     .lcard-lock {
       position: absolute; inset: 0;
       display: none; align-items: center; justify-content: center; flex-direction: column;
-      gap: 1px;
+      gap: 3px;
+      padding-bottom: 22px;
       background: rgba(28, 16, 6, 0.55);
       border-radius: inherit;
-      color: #FFF3CE; font-size: 8px; font-weight: 800; letter-spacing: 0.5px;
+      color: #FFF3CE; font-size: 9px; font-weight: 800; letter-spacing: 1px;
+      white-space: nowrap;
     }
     .lcard.locked .lcard-lock { display: flex; }
-    .lcard-lock b { font-family: var(--font-num); font-size: 11px; }
+    .lcard-lock b { font-size: 17px; line-height: 1; filter: drop-shadow(0 2px 0 rgba(0, 0, 0, 0.4)); }
     /* A card that opened at the level you just reached. Stops pulsing once it
        is in the deck, so the badge marks the unlock, not the selection. */
     .lcard-new {
@@ -530,7 +566,7 @@
     }
     .lcard.fixed { cursor: pointer; }
     .lcard-cost {
-      position: absolute; left: -6px; top: -6px;
+      position: absolute; left: -6px; top: -6px; z-index: 1;
       min-width: 18px; height: 18px; padding: 0 3px;
       display: flex; align-items: center; justify-content: center;
       font-family: var(--font-num); font-size: 10px; line-height: 1;
@@ -589,7 +625,10 @@
     }
     .lv-start:hover { transform: translateY(-3px); box-shadow: 0 11px 0 #23530F, 0 14px 24px rgba(0, 0, 0, 0.42); }
     .lv-start:disabled { cursor: not-allowed; filter: grayscale(0.6) brightness(0.85); transform: none; }
-    .lv-hint { font-size: 9px; font-weight: 700; letter-spacing: 3px; color: #7A5A28; }
+    /* The hint only speaks when the deck is incomplete. The old idle line
+       ("3 · 2 · 1 · GO") sat faintly under BATTLE on every tab and read as a
+       broken countdown; hidden is the honest idle state. */
+    .lv-hint { display: none; font-size: 9px; font-weight: 700; letter-spacing: 3px; color: #D21E1E; }
 
     /* Countdown. Full-bleed over the panel, so the numbers are the only thing
        on screen while they run. */
@@ -663,7 +702,7 @@
       font-size: 10px; font-weight: 800; letter-spacing: 1px; color: #6B4A12;
     }
     .menu-board span { display: flex; align-items: baseline; gap: 4px; }
-    .menu-board b { font-family: var(--font-num); font-size: 16px; font-weight: 400; color: #3A2A12; }
+    .menu-board b { font-family: var(--font-stat); font-feature-settings: 'zero' 1; font-size: 14px; font-weight: 700; color: #3A2A12; }
     .menu-btns { display: flex; flex-direction: column; gap: 8px; width: 100%; max-width: 300px; }
     .mbtn {
       font-family: var(--font-num); font-size: 16px; line-height: 1;
@@ -717,7 +756,7 @@
       transform: translateY(-2px);
       box-shadow: 0 5px 0 var(--vr-gold-shadow), 0 0 14px rgba(255, 201, 74, 0.6);
     }
-    .lv-pane { display: none; width: 100%; flex-direction: column; align-items: center; gap: 8px; }
+    .lv-pane { display: none; width: 100%; flex-direction: column; align-items: center; gap: 8px; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
     .lv-pane.on { display: flex; }
     /* Fifteen stages never fit one row: scroll inside the panel, not past it,
        so BATTLE stays on screen at every window height. */
@@ -768,6 +807,26 @@
       .lv-panel { gap: 5px; padding: 10px 14px 12px; }
       .lv-start { font-size: 21px; padding: 9px 42px; }
       .lv-count b { font-size: 86px; }
+    }
+
+    /* Phones. The hand must stay thumb-reachable: four cards centred, each at
+       least 64x80 of touch target, elixir above, and no side furniture taking
+       the width the cards need. */
+    @media (max-width: 520px) {
+      .chip { width: 78px; padding: 3px 3px 5px; }
+      .chip-face, .chip-face canvas { width: 58px; height: 58px; }
+      .chip-name { font-size: 10px; }
+      .chip-role { display: none; }
+      #roster { gap: 6px; }
+      .elixir-track { width: 190px; height: 22px; }
+      .elixir-num { font-size: 22px; min-width: 28px; }
+      .bar-bottom > .tag { display: none; }
+      .mid .panel { width: 168px; }
+      .row-label { width: 26px; }
+      .dmg { font-size: 22px; }
+      .brand-text { font-size: 13px; }
+      .lv-panel { width: 96vw; padding: 10px 12px 12px; }
+      .lv-pick { max-width: 320px; }
     }
   </style>
 </head>
@@ -873,7 +932,7 @@
       <div class="lv-tabs">
         <button type="button" class="ltab on" id="ltabStage">STAGE</button>
         <button type="button" class="ltab" id="ltabDeck">DECK</button>
-        <button type="button" class="ltab" id="ltabBoard">BOARD</button>
+        <button type="button" class="ltab" id="ltabBoard">STATS</button>
       </div>
 
       <div class="lv-pane on" id="paneStage">
@@ -891,7 +950,7 @@
       </div>
 
       <div class="lv-pane" id="paneBoard">
-        <div class="lv-title">LEADERBOARD</div>
+        <div class="lv-title">CAREER STATS</div>
         <div class="lv-sub">Your career, on this device. No fake rivals.</div>
         <div class="lv-board" id="lobbyBoard"></div>
       </div>

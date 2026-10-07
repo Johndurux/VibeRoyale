@@ -336,6 +336,14 @@ function buildSide(host, totalHost) {
 // every hit and allocating a Vector3 per call would churn the heap in a loop.
 const _proj = new THREE.Vector3();
 
+// Live damage numbers, kept as {x, y, until} screen-space records. When two
+// hits land inside the same beat - a twin strike, a troop and a spell sharing
+// a frame - the second number stamps straight over the first and both read as
+// garbage, which is the "38 printed over a clipped number" report. Each new
+// pop counts who is still on screen nearby and steps aside: stacked upward,
+// nudged alternately left and right, so every number stays whole.
+const livePops = [];
+
 // How far above each tower's base the damage number should float. A king is
 // taller and carries a crown, so it needs more clearance or the number lands
 // inside its own roof.
@@ -440,12 +448,39 @@ export function createUI({ towerKit, camera, onCardPick, onResult, onMenu }) {
   function popDamageAt(x, y, z, amount, ko) {
     if (!fx || !camera) return;
     _proj.set(x, y, z).project(camera);
+    const now = performance.now();
+    for (let i = livePops.length - 1; i >= 0; i--) {
+      if (livePops[i].until <= now) livePops.splice(i, 1);
+    }
+    const sx = (_proj.x * 0.5 + 0.5) * window.innerWidth;
+    const sy = (-_proj.y * 0.5 + 0.5) * window.innerHeight;
+    // Slot ladder: the first offset whose screen neighbourhood is free of a
+    // number that is still flying. Counting nearby pops instead kept colliding
+    // at the threshold edge (two pops landed on the same offset), so the slots
+    // are picked directly - each one alternates left/right and climbs upward,
+    // and the last slot takes the overflow if all seven are somehow alive.
+    const slots = [[0, 0], [11, -17], [-22, -34], [33, -51], [-44, -68], [55, -85], [-66, -102], [77, -119], [-88, -136]];
+    let dx = 0;
+    let dy = 0;
+    for (const [ox, oy] of slots) {
+      dx = ox;
+      dy = oy;
+      // Overlap window is the glyph box, not the slot step: a slot 17px above
+      // another is fine to reuse the neighbourhood of, but the same slot is
+      // not. Too wide a window here marks every lower slot taken and the
+      // ladder collapses to its last rung.
+      const taken = livePops.some(
+        (p) => Math.abs(p.x - (sx + dx)) < 30 && Math.abs(p.y - (sy + dy)) < 20
+      );
+      if (!taken) break;
+    }
     const el = document.createElement('div');
     el.className = ko ? 'dmg ko' : 'dmg';
     el.textContent = ko ? 'KO!' : String(Math.max(1, Math.round(amount)));
-    el.style.left = (_proj.x * 0.5 + 0.5) * window.innerWidth + 'px';
-    el.style.top = (-_proj.y * 0.5 + 0.5) * window.innerHeight + 'px';
+    el.style.left = sx + dx + 'px';
+    el.style.top = sy + dy + 'px';
     fx.appendChild(el);
+    livePops.push({ x: sx + dx, y: sy + dy, until: now + 950 });
     // animationend would be tidier, but a timer is immune to the animation
     // being skipped when the tab is backgrounded mid-pop.
     setTimeout(() => el.remove(), 950);
