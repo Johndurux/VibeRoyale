@@ -260,10 +260,24 @@ function pickTarget(t, troops, towers) {
   // so any card without the field keeps working.
   const mode = (t.card && t.card.targetPriority) || 'nearest';
 
-  // A buildings-only unit still defends itself. If no enemy tower is worth
-  // walking to, it fights, because a siege unit that stands in a crowd and
-  // does nothing is not an answer to anything.
+  // A buildings-only unit walks past the scuffle - but it must fight whatever
+  // is already inside its own weapon's reach. Two siege bodies meeting
+  // head-on both skip each other (towers outrank troops), both keep stepping,
+  // and separation cancels the steps: they would stand nose to nose forever.
+  // Engaging only within reach keeps the identity intact - an enemy two spear
+  // lengths away is still ignored in favour of the tower.
   if (mode === 'buildings') {
+    const reach2 = Math.pow((t.stats && t.stats.range) || 1.5, 2);
+    let cb = null;
+    let cbD = Infinity;
+    for (const o of troops) {
+      if (o.side === t.side || o.dead) continue;
+      const d = (o.x - t.x) * (o.x - t.x) + (o.z - t.z) * (o.z - t.z);
+      if (d > reach2) continue;
+      if (d < cbD) { cbD = d; cb = { kind: 'troop', ref: o }; }
+    }
+    if (cb) return cb;
+
     let bw = null;
     let bwD = Infinity;
     for (const w of towers) {
