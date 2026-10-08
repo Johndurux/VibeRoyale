@@ -552,27 +552,36 @@ export function createUI({ towerKit, camera, onCardPick, onResult, onMenu }) {
     }
     if (settled) return;
     settled = true;
+    // A draw is its own outcome, not a dressed-up defeat: sudden death with
+    // the towers even means nobody's king fell, and the screen claiming one
+    // did is a lie about the match the player just sat through. The clock's
+    // reason line ("SUDDEN DEATH · TOWERS EVEN") says what actually happened.
+    const draw = !!(data && data.winner === 'draw');
     // Reported before the overlay is built, so main.js can stop the bot and
     // pick a cue without waiting on any DOM work.
     if (onResult) onResult(won);
     result.classList.toggle('lose', !won);
-    resultTitle.textContent = won ? 'VICTORY' : 'DEFEAT';
+    resultTitle.textContent = draw ? 'DRAW' : won ? 'VICTORY' : 'DEFEAT';
     // A stage match says which stage it was: the cleared number on a win (the
     // lobby already shows the next one open), the plain fall line on a loss.
     const st = data && data.stage;
-    resultSub.textContent = won
-      ? (st ? 'STAGE ' + st + ' CLEARED' : 'RIVAL KING TOWER DOWN')
-      : 'YOUR KING TOWER FELL';
+    resultSub.textContent = draw
+      ? (typeof data.reason === 'string' && data.reason ? data.reason : 'NO KING FELL')
+      : won
+        ? (st ? 'STAGE ' + st + ' CLEARED' : 'RIVAL KING TOWER DOWN')
+        : 'YOUR KING TOWER FELL';
     const cols = ['#FFC94A', '#FFE9A8', '#6FCF3E', '#6FC7F0', '#FF9AD5', '#FFFFFF'];
-    for (let i = 0; i < 90; i++) {
-      const bit = document.createElement('i');
-      bit.className = 'confetti';
-      bit.style.left = Math.random() * 100 + 'vw';
-      bit.style.background = cols[i % cols.length];
-      bit.style.animationDuration = 1.6 + Math.random() * 2.2 + 's';
-      bit.style.animationDelay = Math.random() * 1.6 + 's';
-      if (i % 3 === 0) bit.style.width = 7 + Math.random() * 5 + 'px';
-      result.appendChild(bit);
+    if (!draw) {
+      for (let i = 0; i < 90; i++) {
+        const bit = document.createElement('i');
+        bit.className = 'confetti';
+        bit.style.left = Math.random() * 100 + 'vw';
+        bit.style.background = cols[i % cols.length];
+        bit.style.animationDuration = 1.6 + Math.random() * 2.2 + 's';
+        bit.style.animationDelay = Math.random() * 1.6 + 's';
+        if (i % 3 === 0) bit.style.width = 7 + Math.random() * 5 + 'px';
+        result.appendChild(bit);
+      }
     }
     result.classList.add('on');
   }
