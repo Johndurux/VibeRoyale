@@ -205,10 +205,25 @@ export const RepeatWrapping = 1000;
 export const FrontSide = 0;
 export const BackSide = 1;
 
+// MathUtils. troops.js calls THREE.MathUtils.clamp while banking a unit into a
+// turn, so any headless test that runs the real troop layer through animate()
+// threw "Cannot read properties of undefined (reading 'clamp')" until this was
+// here. Real arithmetic, not no-ops: a clamp that returned its input would hide
+// exactly the kind of drift these tests exist to catch.
+export const MathUtils = {
+  clamp: (v, lo, hi) => Math.max(lo, Math.min(hi, v)),
+  clamp01: (v) => Math.max(0, Math.min(1, v)),
+  lerp: (a, b, t) => a + (b - a) * t,
+  degToRad: (d) => (d * Math.PI) / 180,
+  radToDeg: (r) => (r * 180) / Math.PI,
+  randFloat: (a, b) => a + Math.random() * (b - a),
+  randFloatSpread: (r) => r * (Math.random() - 0.5),
+};
+
 export default {
   Vector3: V3, Vector2: V3, Euler: Object, Quaternion: Object, Matrix4: Object,
   Object3D: Obj3D, Group, Scene, Camera, Mesh, Points, Material, BufferAttribute, CanvasTexture,
   MeshBasicMaterial: mat, MeshLambertMaterial: mat,
   BoxGeometry: geo, PlaneGeometry: geo, CylinderGeometry: geo, SphereGeometry: geo,
-  ConeGeometry: geo, BufferGeometry: geo, Clock, Raycaster, WebGLRenderer,
+  ConeGeometry: geo, BufferGeometry: geo, Clock, Raycaster, WebGLRenderer, MathUtils,
 };

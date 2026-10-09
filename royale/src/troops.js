@@ -143,6 +143,73 @@ export function passable(x, z) {
   return true;
 }
 
+/**
+ * Does the straight line from (x1,z1) to (x2,z2) cut through the pool?
+ *
+ * stepToward uses this to decide that a unit must walk around the water's end
+ * instead of straight at its target. The river occupies the x bands
+ * (1.95, 3.7) and (-3.7, -1.95) for |z| < 6.0, which is the same rectangle
+ * passable() refuses. One box per bank is tested over an OPEN interval on each
+ * axis, so a line that only grazes x = 1.95 or z = 6.0 exactly is not blocked:
+ * those coordinates are walkable and a unit standing on them must not be sent
+ * on a detour it can never finish.
+ *
+ * @param {number} x1
+ * @param {number} z1
+ * @param {number} x2
+ * @param {number} z2
+ * @returns {boolean}
+ */
+function segCrossesWater(x1, z1, x2, z2) {
+  const zBand = RIVER_HALF_L + WALK_MARGIN; // 6.0
+  const xBand = RIVER_HALF_W + WALK_MARGIN; // 3.7
+  const zLo = Math.max(Math.min(z1, z2), -zBand);
+  const zHi = Math.min(Math.max(z1, z2), zBand);
+  if (zLo >= zHi) return false;
+  const xLo = Math.min(x1, x2);
+  const xHi = Math.max(x1, x2);
+  return Math.max(xLo, BRIDGE_HALF_W) < Math.min(xHi, xBand)
+    || Math.max(xLo, -xBand) < Math.min(xHi, -BRIDGE_HALF_W);
+}
+
+/**
+ * Aim for the first leg of a walk around the pool's end.
+ *
+ * Called when the straight line to the target cuts the water. The unit is
+ * committed to a waypoint just past the pool's end on the pair's own side of
+ * the river: first straight out to that end line, then across it past the
+ * pool, after which segCrossesWater goes false and the caller's direct aim
+ * takes over on the final approach.
+ *
+ * Both legs are provably clear. A step straight out at the unit's own x never
+ * enters the water band, because the unit is standing somewhere walkable and
+ * the band needs |x| strictly between 1.95 and 3.7. A step along z = ±6.4 is
+ * past the water's |z| < 6 extent entirely.
+ *
+ * This is what a pair stuck at the pool's edge was missing: with no detour
+ * outside the bridge span, two units on opposite sides of the water each
+ * walked into the edge every frame, the collision cascade slid them back, and
+ * they stood face to face forever without trading a blow.
+ *
+ * @param {object} t the mover
+ * @param {number} tx
+ * @param {number} tz
+ * @param {number} mySide sign of the unit's own z, as a fallback
+ * @returns {{x: number, z: number}} the aim point
+ */
+function roundPoolAim(t, tx, tz, mySide) {
+  const side = Math.sign(tz) || mySide;
+  const endZ = side * (RIVER_HALF_L + WALK_MARGIN + 0.4);
+  // "Across" means past the pool's end on the way to the target - same z sign
+  // as the end line AND at least as far out. A unit still on the far side of
+  // the pool (say z = +12 heading to z = -5) is NOT across just because
+  // |z| > |endZ|: it must first run down its own lane to the end line, then
+  // cross. Testing signed distance this way is what keeps a lane unit from
+  // being yanked toward the middle two-thirds of the map.
+  const across = Math.sign(t.z) === side && Math.abs(t.z) >= Math.abs(endZ);
+  return across ? { x: tx, z: endZ } : { x: t.x, z: endZ };
+}
+
 /** '#a259ff' -> 0xa259ff, for reusing a card's own colour on its debris. */
 function hexOf(css) {
   return parseInt(String(css).replace('#', ''), 16);
@@ -394,11 +461,33 @@ function stepToward(t, tx, tz, dt, troops) {
       // through the mouth instead of skirting the pool edge
       aimX = 0;
       aimZ = mouthZ;
+    } else if (segCrossesWater(t.x, t.z, tx, tz)) {
+      // On the bank, and the straight line to the far side still clips the
+      // pool: go round its end rather than into the blue.
+      const r = roundPoolAim(t, tx, tz, mySide);
+      aimX = r.x;
+      aimZ = r.z;
     }
   } else if (onBridge && Math.abs(tx) > BRIDGE_HALF_W) {
-    // On bridge but targeting something on the bank: must exit bridge first
+    // On bridge but targeting something on the bank: must exit bridge first.
+    // Exit toward the end that shares the target's side. The target keeps
+    // this half's sign here (crossingRiver is false), so that end is always
+    // the short way round the pool - and unlike comparing z with the unit's
+    // own z, the target's sign cannot flip from step to step. Comparing z
+    // used to flip whenever the two z were nearly equal - a fight lining up
+    // mid-bridge - and the unit vibrated a step north, a step south,
+    // forever while the enemy stood in front of it. The mySide fallback
+    // only fires for a target parked at z exactly 0.
     aimX = t.x;
-    aimZ = Math.sign(tz - t.z || mySide) * (FENCE_SPAN_Z + 0.5);
+    aimZ = (Math.sign(tz) || mySide) * (FENCE_SPAN_Z + 0.5);
+  } else if (segCrossesWater(t.x, t.z, tx, tz)) {
+    // Neither crossing the river nor on the bridge, yet the straight line to
+    // the target still cuts the pool - a pair meeting at the deck's edge just
+    // outside the span, or a bank unit and a deck unit on the same half. Walk
+    // round the pool's end instead of grinding into the waterline.
+    const r = roundPoolAim(t, tx, tz, mySide);
+    aimX = r.x;
+    aimZ = r.z;
   }
 
   const adx = aimX - t.x;
@@ -408,23 +497,38 @@ function stepToward(t, tx, tz, dt, troops) {
   let nx = t.x + (adx / ad) * s;
   let nz = t.z + (adz / ad) * s;
 
-  // Collision resolution against bridge fence and water
-  if (!passable(nx, nz)) {
-    if (passable(t.x, nz)) {
-      nx = t.x;
-    } else if (passable(nx, t.z)) {
-      nz = t.z;
-    } else {
-      const altZ = t.z + Math.sign(adz || 1) * s;
-      if (passable(t.x, altZ)) {
-        nx = t.x;
-        nz = altZ;
-      } else {
-        t.moving = false;
-        return;
-      }
+  // Collision resolution against bridge fence and water. The direct step
+  // is tried first, then axis slides, then diagonal escapes - and a
+  // candidate that would leave the body exactly where it stands counts as
+  // a failure. That last part is load-bearing: a pure-x step into the
+  // water's edge used to "succeed" with zero movement, so the unit walked
+  // in place forever, facing an enemy it could never reach.
+  const stepLen = Math.hypot(nx - t.x, nz - t.z);
+  const cands = [[nx, nz], [t.x, nz], [nx, t.z]];
+  if (stepLen > 1e-9) {
+    const ux = (nx - t.x) / stepLen;
+    const uz = (nz - t.z) / stepLen;
+    // Rotate the step ±45° and ±90°: a body wedged between the railing
+    // and the pool slides along the obstacle instead of grinding on it.
+    for (const ang of [Math.PI / 4, -Math.PI / 4, Math.PI / 2, -Math.PI / 2]) {
+      const c = Math.cos(ang);
+      const sn = Math.sin(ang);
+      cands.push([t.x + (ux * c - uz * sn) * stepLen, t.z + (ux * sn + uz * c) * stepLen]);
     }
   }
+  let picked = null;
+  for (const cand of cands) {
+    if (!passable(cand[0], cand[1])) continue;
+    if (Math.abs(cand[0] - t.x) < 1e-9 && Math.abs(cand[1] - t.z) < 1e-9) continue;
+    picked = cand;
+    break;
+  }
+  if (!picked) {
+    t.moving = false;
+    return;
+  }
+  nx = picked[0];
+  nz = picked[1];
 
   // The queue: never plant this body inside another living fighter. The
   // separation pass owns spacing once everyone has moved; this owns the half
