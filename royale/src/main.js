@@ -486,6 +486,9 @@ function deploy(clientX, clientY) {
     audio.play('deny');
     return;
   }
+  // Counted the moment the elixir actually leaves the bar, so the end-of-match
+  // stat cannot under-report what a troop deploy really cost.
+  elixirSpentThisMatch += ui.costOf(id);
 
   const t = troops.spawn(card, p.x, p.z, 'player');
   if (!t) {
@@ -845,10 +848,11 @@ menu.show();
 // that. ?probe=1 replays that assumption: it skips the lobby and starts a
 // normal match immediately with the full roster, so an audit can keep driving
 // the page without learning what a lobby is. Human-loaded pages never see it.
-// Dev-only. Set to true in a dev build; a shipped build leaves it false and
-// the probe flags below become inert, so the harnesses keep working against a
-// dev build without leaving a bypass in production.
-const DEV = true;
+// Dev-only, and origin-gated: DEV is true only on a local origin, so a deployed
+// host (viberoyale.vercel.app or any other) reads every probe flag below as
+// inert. The harnesses keep working because they run against localhost, which
+// is exactly where this is true.
+const DEV = /^(localhost|127\.0\.0\.1|\[::1\]|::1|0\.0\.0\.0)$/i.test(location.hostname);
 const qs = new URLSearchParams(location.search);
 
 if (DEV && qs.get('probe') === '1') {
@@ -863,7 +867,9 @@ if (DEV && qs.get('probe') === '1') {
 // deployed troop, a spent card - without playing through to get there.
 window.__vrScope = null;
 try {
-  window.__vrScope = {
+  // DEV-gated like the probe flags: off a local origin this stays null, so a
+  // deployed page never publishes the test surface to any script on the origin.
+  if (DEV) window.__vrScope = {
     __scene: { scene, camera, renderer, ARENA, TOWERS, PALETTE },
     __arena: { arena },
     __towers: towerKit,

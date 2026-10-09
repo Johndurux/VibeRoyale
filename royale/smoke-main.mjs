@@ -201,7 +201,7 @@ ok(main.includes("audio.setScene('battle')"), 'a new match switches back to the 
 ok(main.includes("audio.play('overtime')"), 'overtime has its own cue');
 
 console.log('\n== the dev flags are gated ==');
-ok(/const DEV = true;/.test(main), 'a DEV flag exists');
+ok(/const DEV = .*test\(location\.hostname\)/.test(main), 'the DEV flag is gated to a local origin');
 ok(main.includes("if (DEV && qs.get('probe') === '1')"), 'the probe flag is behind DEV');
 ok(main.includes("if (DEV && qs.get('state') === 'damaged')"), 'the state flag is behind DEV');
 ok(!/^\s*if \(new URLSearchParams\(location\.search\)\.get\('probe'\)/m.test(main), 'the bare probe flag no longer arms a match');

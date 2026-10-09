@@ -84,8 +84,8 @@ const TROOP_CARDS = [
     unlocked: true,
     build: () => {
       const g = buildChibi('armor');
-      g.armR.add(spear({ shaft: 0x1c1a1b, collar: 0xffc94a, blade: 0xffc94a, tip: 0xefe9dc }));
-      g.armL.add(shield({ plate: 0xffc94a, rim: 0x1c1a1b, boss: 0xefe9dc }));
+      g.armR.add(...spear({ shaft: 0x1c1a1b, collar: 0xffc94a, blade: 0xffc94a, tip: 0xefe9dc }));
+      g.armL.add(...shield({ plate: 0xffc94a, rim: 0x1c1a1b, boss: 0xefe9dc }));
       return g;
     }
   },
@@ -103,7 +103,7 @@ const TROOP_CARDS = [
     unlocked: true,
     build: () => {
       const g = buildChibi('mist');
-      g.armR.add(spear({ shaft: 0x3aa88e, collar: 0x125f4b, blade: 0x3fe0c5, tip: 0xd8fffa }));
+      g.armR.add(...spear({ shaft: 0x3aa88e, collar: 0x125f4b, blade: 0x3fe0c5, tip: 0xd8fffa }));
       return g;
     }
   },
@@ -120,7 +120,7 @@ const TROOP_CARDS = [
     unlocked: true,
     build: () => {
       const g = buildChibi('pip');
-      g.armR.add(spear({ shaft: 0x8a5d3b, collar: 0xe8607f, blade: 0xefe9dc, tip: 0xffffff }));
+      g.armR.add(...spear({ shaft: 0x8a5d3b, collar: 0xe8607f, blade: 0xefe9dc, tip: 0xffffff }));
       return g;
     }
   },
@@ -137,7 +137,7 @@ const TROOP_CARDS = [
     unlocked: true,
     build: () => {
       const g = buildChibi('honey');
-      g.armL.add(bow({}));
+      g.armL.add(...bow({}));
       return g;
     }
   },
@@ -154,7 +154,7 @@ const TROOP_CARDS = [
     unlocked: true,
     build: () => {
       const g = buildChibi('goggles');
-      g.armR.add(sword({ grip: 0x5a3a22, guard: 0xd89535, blade: 0xd89535, edge: 0xf5e2b8 }));
+      g.armR.add(...sword({ grip: 0x5a3a22, guard: 0xd89535, blade: 0xd89535, edge: 0xf5e2b8 }));
       return g;
     }
   },
@@ -172,7 +172,7 @@ const TROOP_CARDS = [
     unlocked: true,
     build: () => {
       const g = buildChibi('captain');
-      g.armR.add(sword({ guard: 0xe9c64a, blade: 0xefe9dc, edge: 0xffffff }));
+      g.armR.add(...sword({ guard: 0xe9c64a, blade: 0xefe9dc, edge: 0xffffff }));
       return g;
     }
   },
@@ -190,7 +190,7 @@ const TROOP_CARDS = [
     unlocked: true,
     build: () => {
       const g = buildChibi('lavender');
-      g.armL.add(bow({ limb: 0x9a70d6, arrow: 0xffd772, arrowhead: 0x6d4fa0 }));
+      g.armL.add(...bow({ limb: 0x9a70d6, arrow: 0xffd772, arrowhead: 0x6d4fa0 }));
       return g;
     }
   },
@@ -207,7 +207,7 @@ const TROOP_CARDS = [
     unlocked: true,
     build: () => {
       const g = buildChibi('tux');
-      g.armR.add(sword({ guard: 0x3fe2ec, blade: 0xefe9dc, edge: 0x3fe2ec }));
+      g.armR.add(...sword({ guard: 0x3fe2ec, blade: 0xefe9dc, edge: 0x3fe2ec }));
       return g;
     }
   },
@@ -224,7 +224,7 @@ const TROOP_CARDS = [
     unlocked: true,
     build: () => {
       const g = buildChibi('mrhat');
-      g.armR.add(sword({ grip: 0x2fb58f, guard: 0xffd772, blade: 0xefe9dc, edge: 0xffffff }));
+      g.armR.add(...sword({ grip: 0x2fb58f, guard: 0xffd772, blade: 0xefe9dc, edge: 0xffffff }));
       return g;
     }
   }
