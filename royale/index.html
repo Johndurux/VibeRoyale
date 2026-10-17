@@ -139,6 +139,33 @@
     .menu-btn:hover { transform: translateY(-2px); }
     .menu-btn:active { transform: translateY(1px); }
 
+    /* -- match clock ------------------------------------------------------
+       A fact about the match rather than the board, so it sits in the top bar
+       beside the phase tag. It stays hidden until the clock actually arms
+       (reset() hides it, the first tick shows it): a pill reading 3:00 on a
+       lobby screen would be exactly the fake clock this HUD promised never to
+       print. */
+    .tag.timer { display: flex; align-items: center; gap: 8px; min-width: 94px;
+      justify-content: center; font-family: var(--font-num); }
+    .tag.timer.off { visibility: hidden; }
+    .tag.timer b { font-weight: 400; font-size: 15px; color: var(--parchment); }
+    .tag.timer .ot-badge {
+      display: none; font-size: 9px; font-weight: 700; letter-spacing: 1px;
+      color: #FFF3CE; background: #B3251B; border: 2px solid var(--vr-font-outline);
+      border-radius: 5px; padding: 1px 5px;
+    }
+    .tag.timer.ot { background: linear-gradient(180deg, #FF9A5C, #C0301C 60%, #7A1508); }
+    .tag.timer.ot b { color: #FFF3CE; }
+    .tag.timer.ot .ot-badge { display: inline-block; }
+    .tag.timer.urgent b { color: #FFD2A8; }
+    /* Overtime gets a kick, not a permanent wiggle: the pill has to be read at
+       a glance for the rest of the match. */
+    .tag.timer.flash { animation: clockFlash 700ms steps(2) 3; }
+    @keyframes clockFlash {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.16); }
+    }
+
     /* -- tower banners ---------------------------------------------------
        A gold rim around a parchment face, with a swallow-tail notch cut into
        the bottom so it reads as a hanging banner, not a settings box. */
@@ -791,6 +818,31 @@
     }
     #contextLost .ctx-body { margin-top: 10px; font-size: 13px; font-weight: 600; color: var(--parchment); line-height: 1.7; }
 
+    /* -- first-run coaching ------------------------------------------------
+       Shown once per save, on the menu, before the first match. It is a modal
+       on purpose: the four rules it carries are the whole game, and a player
+       who skips them has nothing to lose by reading them now. */
+    #tutorial {
+      position: absolute; inset: 0; z-index: 45; display: none;
+      align-items: center; justify-content: center; padding: 20px;
+      background: rgba(26, 16, 6, 0.78);
+    }
+    #tutorial.on { display: flex; }
+    .tut-card {
+      width: 100%; max-width: 430px; padding: 18px 20px 20px;
+      background: linear-gradient(180deg, var(--gold-hi), var(--vr-gold-border) 55%, var(--vr-gold-shadow));
+      border: 3px solid var(--vr-font-outline); border-radius: 14px;
+      box-shadow: var(--drop);
+    }
+    .tut-title {
+      display: block; margin-bottom: 12px; font-family: var(--font-num); font-size: 20px;
+      color: var(--parchment); -webkit-text-stroke: 3px var(--vr-font-outline); paint-order: stroke fill;
+    }
+    .tut-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+    .tut-list li { font-size: 12px; font-weight: 700; line-height: 1.45; color: #3A2A12; }
+    .tut-list b { color: #7A1508; }
+    .tut-ok { display: block; width: 100%; margin-top: 16px; }
+
     /* Short windows: the card faces give up size first, since the arena is the
        thing worth protecting. */
     @media (max-height: 640px) {
@@ -841,6 +893,12 @@
       </div>
       <div class="tag" id="stageBadge" style="display:none">STAGE <b id="stageNum">1</b></div>
       <div class="tag">PHASE <b>02</b> &middot; CARD PLAY</div>
+      <!-- Armed by main.js's clock, drawn by ui.setTimer(). Hidden until then -
+           see the .tag.timer rule. -->
+      <div class="tag timer off" id="timerPill">
+        <b id="timerNum">3:00</b>
+        <span class="ot-badge" id="timerOt">OT</span>
+      </div>
       <button type="button" class="tag menu-btn" id="btnMenu">MENU</button>
     </div>
 
@@ -970,6 +1028,21 @@
     <div class="result-actions" id="resultActions">
       <button type="button" id="btnPlayAgain" class="result-btn primary">PLAY AGAIN</button>
       <button type="button" id="btnChangeDeck" class="result-btn secondary">CHANGE DECK</button>
+    </div>
+  </div>
+
+  <!-- First-run coaching. main.js shows it once per save, on the menu, before
+       the first match; any dismissal marks it seen. -->
+  <div id="tutorial">
+    <div class="tut-card">
+      <b class="tut-title">HOW TO PLAY</b>
+      <ul class="tut-list">
+        <li><b>1</b> Pick a card from the four in your hand along the bottom edge.</li>
+        <li><b>2</b> Tap <b>your</b> half of the grass to deploy it. Spells land anywhere.</li>
+        <li><b>3</b> Hold a card for its numbers. Keys <b>1-4</b> arm it too.</li>
+        <li><b>4</b> Kill the rival king before yours falls. A fallen tower stays fallen.</li>
+      </ul>
+      <button type="button" id="tutOk" class="tut-ok mbtn primary">GOT IT</button>
     </div>
   </div>
 

@@ -36,7 +36,7 @@ function count(re) {
 
 console.log('\n== each module publishes the members main.js needs ==');
 const surface = {
-  'ui.js': ['update', 'setDeck', 'popDamage', 'popDamageAt', 'showResult', 'spend', 'select', 'costOf', 'markAffordable', 'flashHint', 'elixir', 'selected', 'deck'],
+  'ui.js': ['update', 'setDeck', 'popDamage', 'popDamageAt', 'showResult', 'spend', 'select', 'costOf', 'markAffordable', 'flashHint', 'elixir', 'selected', 'deck', 'reset', 'setTimer', 'flashOvertime', 'showTutorial', 'hideTutorial'],
   'vfx.js': ['root', 'update', 'setDeployZone', 'deployBurst', 'rubble', 'spellRing', 'spellBlast', 'liveCount'],
   'audio.js': ['unlock', 'play', 'setMusic', 'setScene'],
   'troops.js': ['root', 'troops', 'update', 'spawn', 'clear', 'blast', 'freezeArea', 'inRadius', 'MAX_TROOPS'],
@@ -54,9 +54,12 @@ for (const [file, members] of Object.entries(surface)) {
 }
 
 console.log('\n== main.js calls nothing that does not exist ==');
-// The four methods the UI pass still owes are called behind a guard, so they
-// are allowed to be absent. Everything else must be a real member.
-const guarded = new Set(['setTimer', 'reset', 'flashOvertime', 'showResultPanel']);
+// Nothing is excused any more. The methods the UI pass owed - setTimer, reset,
+// flashOvertime, showResultPanel - all exist now, so keeping them in an
+// exemption list would only hide the next rename. The guard at the call site is
+// still there and still correct (a HUD that has not been mounted should not stop
+// the clock), but it is no longer allowed to be the reason a member is absent.
+const guarded = new Set();
 const pairs = [
   ['ui', 'ui.js'], ['vfx', 'vfx.js'], ['troops', 'troops.js'],
   ['towerKit', 'towers.js'], ['bot', 'bot.js'], ['lobby', 'lobby.js'],
@@ -75,10 +78,44 @@ for (const [obj, file] of pairs) {
   ok(missing.length === 0, obj + ' -> ' + [...called].sort().join(', ') + (missing.length ? '  MISSING ' + missing.join(', ') : ''));
 }
 
-console.log('\n== the four UI-pass methods are actually guarded ==');
-for (const m of guarded) {
-  ok(new RegExp('if \\(ui\\.' + m + '\\)').test(main), 'ui.' + m + ' is behind an existence check');
+console.log('\n== the clock and the coaching panel are wired end to end ==');
+ok(/if \(ui\.setTimer\) ui\.setTimer\(info\.seconds, info\.phase\);/.test(main), 'the tick hands the clock to the HUD');
+ok(/if \(ui\.flashOvertime\) ui\.flashOvertime\(\);/.test(main), 'overtime kicks the pill');
+ok(/onTutorialDone: \(\) => progression\.markTutorialSeen\(\)/.test(main), 'dismissing the panel writes it to the save');
+ok(/if \(FEATURES\.tutorial && !PROBE_LOAD\)/.test(main), 'the panel is behind the tutorial flag and off for probe loads');
+ok(/const PROBE_LOAD = DEV && \(qs\.get\('probe'\) === '1' \|\| qs\.has\('state'\)\)/.test(main), 'every dev flag counts as a harness load');
+ok(/if \(fresh && !progression\.hasSeenTutorial\(\)\) ui\.showTutorial\(\);/.test(main), 'only a fresh save is offered it');
+ok(/const fresh = snap\.matches === 0 && snap\.wins === 0 && snap\.stage <= 1;/.test(main), 'a save mid-campaign is not a new player');
+const uiSrc = fs.readFileSync(path.join(root, 'ui.js'), 'utf8');
+ok(/function setTimer\(seconds, phase\)/.test(uiSrc), 'the HUD draws the clock from (seconds, phase)');
+ok(uiSrc.includes("classList.toggle('ot', phase === 'ot')"), 'the OT look comes from the phase it was handed, not a guess');
+ok(uiSrc.includes("classList.toggle('urgent', phase !== 'ot' && s <= 30)"), 'the last 30s of regulation go warm');
+ok(uiSrc.includes("timerPill.classList.add('off')"), 'reset() puts the clock away with the rest of the match state');
+ok(/function showTutorial\(/.test(uiSrc) && /function hideTutorial\(/.test(uiSrc), 'the panel opens and closes through the HUD');
+ok(uiSrc.includes("if (typeof onTutorialDone === 'function') onTutorialDone();"), 'a dismissal reports back exactly through the hook');
+ok(/const HOLD_MS = 450;/.test(uiSrc) && uiSrc.includes('if (!FEATURES.longPressTips) continue;'), 'hold-to-read sits behind the long-press flag');
+ok(uiSrc.includes('if (holdFired) {'), 'the click that closes a hold does not also arm the card');
+ok(uiSrc.includes("c.name + ' · HP' + card.hp + ' DPS' + card.dps + ' SPD' + card.speed"), 'the tip reads the same CARDS table the fight does');
+const html = fs.readFileSync(fileURLToPath(new URL('./index.html', import.meta.url)), 'utf8');
+for (const id of ['timerPill', 'timerNum', 'tutorial', 'tutOk']) {
+  ok(html.includes('id="' + id + '"'), 'index.html carries #' + id);
 }
+ok(html.includes('class="tag timer off"'), 'the pill ships hidden, so no clock is printed before one exists');
+
+console.log('\n== the audio scene has a way back ==');
+// The scene is set forward from main.js (battle on a start, overtime on the
+// clock) and nothing in main.js ever sends it home. Left like that, the second
+// match's countdown inherits the last match's scene: drums, battle tempo and the
+// crowd bed over the deck screen. The lobby owns its own scene because it is the
+// only screen that knows it is the lobby.
+const lobbySrc = fs.readFileSync(path.join(root, 'lobby.js'), 'utf8');
+ok(/if \(audio\) audio\.setScene\('lobby'\);/.test(lobbySrc), 'the lobby takes its scene back on the way in');
+ok(/if \(FEATURES\.lobbyMusic\) \{[\s\S]{0,60}audio\.setScene\('battle'\);/.test(main), 'a match start still claims the battle scene');
+ok(main.includes("if (FEATURES.lobbyMusic) audio.setScene('overtime');"), 'overtime still claims its own scene');
+const audioSrc = fs.readFileSync(path.join(root, 'audio.js'), 'utf8');
+ok(audioSrc.includes("if (name === 'lobby') {"), 'the lobby scene drops the crowd bed');
+ok(/if \(!ctx \|\| muted\) return;/.test(audioSrc), 'a cue before unlock() or while muted is a no-op, never a throw');
+ok(audioSrc.includes("viberoyale.muted"), 'muting is remembered across boots');
 
 console.log('\n== no temporal dead zone on the settlement path ==');
 // The HUD's onResult hook can reach endMatch(), and endMatch reads these four.
@@ -186,7 +223,17 @@ const spellEnd = deploy.indexOf('FIELD IS FULL');
 const spellBranch = deploy.slice(spellStart, spellEnd > spellStart ? spellEnd : undefined);
 ok(!spellBranch.includes('deployBurst'), 'the spell branch does not also draw a deploy puff');
 ok(!spellBranch.includes('FIELD IS FULL'), 'a spell is not refused because the field is full - it adds no troop');
-ok(spellBranch.includes('ui.spend(ui.costOf(id))'), 'a spell charges its own elixir');
+ok(spellBranch.includes('ui.spend(cost)'), 'a spell charges its own elixir');
+// Payment has to come before the launch, not after it: spells.cast() throws the
+// projectile immediately and the effect resolves a beat later, so a spend that
+// failed after the cast still landed an unpaid spell on the board.
+const affordAt = spellBranch.indexOf('ui.elixir < cost');
+const castAt = spellBranch.indexOf('spells.cast(card.spell');
+const payAt = spellBranch.indexOf('ui.spend(cost)');
+ok(
+  affordAt !== -1 && affordAt < castAt && castAt < payAt,
+  'an unaffordable spell is refused before the cast is launched'
+);
 ok(deploy.indexOf('if (card.spell)') < deploy.indexOf('FIELD IS FULL'), 'the spell branch runs before the troop capacity gate');
 
 console.log('\n== the wreck is felt, not just seen ==');

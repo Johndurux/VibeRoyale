@@ -141,6 +141,9 @@ const ui = createUI({
     // match state. Deliberately does not stop the bot or play a cue.
   },
   onMenu: () => quitToLobby(),
+  // The first-run panel is advice, not a gate: once it has been dismissed it is
+  // written to the save and never offered again.
+  onTutorialDone: () => progression.markTutorialSeen(),
 });
 
 // Every tower hit raises a damage number at the tower that took it, and says
@@ -448,6 +451,20 @@ function deploy(clientX, clientY) {
   // must still be able to throw a fireball. Otherwise the player is holding
   // the card, has the elixir, taps a legal spot, and nothing happens.
   if (card.spell) {
+    // Paid before the cast is launched, not after. spells.cast() throws the
+    // projectile there and then - the effect resolves a beat later - so a spend
+    // that failed after it left the wand anyway landed an UNPAID spell on the
+    // board, which is exactly the free cast the notice below pretends to
+    // refuse. The chip is selectable while dimmed (only locked cards are
+    // disabled), so this was reachable by tapping a greyed spell and then the
+    // pitch. Checking first keeps the original promise - a spell that could not
+    // resolve costs nothing - while making the payment unconditional.
+    const cost = ui.costOf(id);
+    if (ui.elixir < cost) {
+      ui.flashHint('NOT ENOUGH ELIXIR');
+      audio.play('deny');
+      return;
+    }
     const res = spells.cast(card.spell, p.x, p.z, 'player');
     if (!res) {
       ui.flashHint('SPELL UNAVAILABLE');
@@ -457,13 +474,13 @@ function deploy(clientX, clientY) {
     // Charged here, after the cast resolved, so a spell that could not
     // resolve never costs anything. The shared spend further down sits behind
     // the troop capacity gate, which a spell must not be subject to.
-    if (!ui.spend(ui.costOf(id))) {
+    if (!ui.spend(cost)) {
       ui.flashHint('NOT ENOUGH ELIXIR');
       audio.play('deny');
       return;
     }
     spellsCastThisMatch++;
-    elixirSpentThisMatch += ui.costOf(id);
+    elixirSpentThisMatch += cost;
     audio.play('place');
     ui.select(null);
     ghost.visible = false;
@@ -861,6 +878,26 @@ if (DEV && qs.get('probe') === '1') {
   startMatch(1, CHARACTERS.map((c) => c.id));
 }
 
+// Whether a human rather than a harness is looking at this page. The probe
+// flags below are all dev-gated, so this is the same gate read backwards: a
+// deployed page, where every flag is inert, always counts as human.
+const PROBE_LOAD = DEV && (qs.get('probe') === '1' || qs.has('state'));
+
+// -- first-run coaching ------------------------------------------------------
+// Shown once per save, on the menu: the rules on the panel are the whole game,
+// and the minute before a player's first deploy is the cheapest moment to read
+// them. Two cases skip it rather than force it:
+//   - a harness page is driven from the first frame, and a modal over the board
+//     is one more thing for an audit to trip over;
+//   - a save with a career behind it is not a new player. hasSeenTutorial() was
+//     never written before this shipped, so without that check every existing
+//     save would be handed the beginner panel mid-campaign.
+if (FEATURES.tutorial && !PROBE_LOAD) {
+  const snap = progression.snapshot();
+  const fresh = snap.matches === 0 && snap.wins === 0 && snap.stage <= 1;
+  if (fresh && !progression.hasSeenTutorial()) ui.showTutorial();
+}
+
 // -- test surface ------------------------------------------------------------
 // Test-only: nothing in the game imports this. It exists so the screenshot and
 // probe harnesses can put the board into a known state - damaged towers, a
@@ -914,6 +951,17 @@ try {
 //   targets all three. A previous version asked for a 4th tower that does not
 //   exist, so the KO step silently did nothing and the shot showed no wreck.
 if (DEV && qs.get('state') === 'damaged') {
+  // The match is started FIRST, and that order is the whole point: startMatch()
+  // resets the tower kit, so a damage plan applied before it was wiped and the
+  // "damaged" board rendered at full health with no KO wreck. The probe needs
+  // to photograph the damage, which only paints once the match is live and the
+  // loop is running HUD updates, and the lobby would be in the way of that
+  // frame, so a probe load starts the match immediately with the full roster.
+  // No game code reads this flag - it is the screenshot harness.
+  menu.hide();
+  lobby.hide();
+  startMatch(1, CHARACTERS.filter((c) => c.unlocked !== false).map((c) => c.id));
+
   const enemy = towerKit.towers.filter((t) => t.side === 'enemy');
   const plan = [
     { pick: 0, amount: 0.45, hold: false },   // king  -> 55% amber
@@ -937,13 +985,6 @@ if (DEV && qs.get('state') === 'damaged') {
     glitch: Number(t.glitch.toFixed(2)),
     wrecked: !!t.wrecked,
   }))));
-  // The probe needs to photograph the damage, which only paints once the match
-  // is live and the loop is running HUD updates. The lobby would be in the way
-  // of that frame, so a probe load starts the match immediately with the full
-  // roster. No game code reads this flag - it is the screenshot harness.
-  menu.hide();
-  lobby.hide();
-  startMatch('normal', CHARACTERS.filter((c) => c.unlocked !== false).map((c) => c.id));
 }
 
 animate();

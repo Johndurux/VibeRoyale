@@ -11,7 +11,7 @@
 import * as THREE from 'three';
 import { CHARACTERS } from './characters.js';
 import { hpColour } from './towers.js';
-import { RARITY, CARDS } from './config.js';
+import { RARITY, CARDS, SPELLS, FEATURES } from './config.js';
 
 // Portrait resolution. Over-sampled against the ~46px the face is displayed at
 // so the voxel steps stay crisp instead of aliasing into mush. Exported
@@ -289,11 +289,63 @@ function buildRoster(host, hint, onCardPick, deck) {
     if (hint) hint.textContent = baseText(id);
   }
 
+  // The tip line. These numbers are read from the same CARDS/SPELLS tables the
+  // match charges and resolves from, so a hold cannot advertise a stat the fight
+  // does not use. Spells carry no hp/dps and are marked by the `spell` key, the
+  // same marker troops.js and bot.js test rather than a second roster flag.
+  function tipText(id) {
+    const c = CHARACTERS.find((x) => x.id === id);
+    const card = CARDS[id];
+    if (!c || !card) return null;
+    if (card.spell) {
+      const sp = SPELLS[card.spell] || {};
+      if (sp.kind === 'freeze') return c.name + ' · ' + card.cost + ' ELIXIR · FROZEN ' + sp.duration + 'S IN ' + sp.radius;
+      if (sp.kind === 'heal') return c.name + ' · ' + card.cost + ' ELIXIR · MENDS ' + Math.round((sp.amount || 0) * 100) + '% IN ' + sp.radius;
+      return c.name + ' · ' + card.cost + ' ELIXIR · ' + (sp.amount || 0) + ' DAMAGE IN ' + sp.radius;
+    }
+    return c.name + ' · HP' + card.hp + ' DPS' + card.dps + ' SPD' + card.speed;
+  }
+
+  // Hold to read. A tap still arms the card; a hold that lasts HOLD_MS reads it
+  // out on the hint line instead, and swallows the click that follows, or arming
+  // would paint the base text straight over the tip it just asked for.
+  const HOLD_MS = 450;
+  let holdTimer = null;
+  let holdFired = false;
+
+  function endHold() {
+    if (holdTimer) {
+      clearTimeout(holdTimer);
+      holdTimer = null;
+    }
+  }
+
   for (const [id, el] of chips) {
     el.addEventListener('click', () => {
+      // The click that closes a hold is the hold, not a pick.
+      if (holdFired) {
+        holdFired = false;
+        return;
+      }
       select(id);
       if (onCardPick) onCardPick(id);
     });
+    if (!FEATURES.longPressTips) continue;
+    el.addEventListener('pointerdown', () => {
+      endHold();
+      holdFired = false;
+      holdTimer = setTimeout(() => {
+        holdTimer = null;
+        const tip = tipText(id);
+        if (!tip) return;
+        holdFired = true;
+        flashHint(tip);
+      }, HOLD_MS);
+    });
+    for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) el.addEventListener(ev, endHold);
+    // A held button is a context menu on touch and a text selection on desktop.
+    // Neither is what the gesture is for.
+    el.addEventListener('contextmenu', (e) => e.preventDefault());
   }
 
   // Default to the first fighter actually on show - the deck, not the whole
@@ -358,8 +410,11 @@ const POP_HEIGHT = { king: 8.6, small: 6.4 };
  * @param {(won: boolean) => void} [deps.onResult] a king has fallen and the
  *   outcome is decided. main.js uses it to stop the bot and to choose the
  *   victory or defeat cue, so the HUD never needs to know what audio is.
+ * @param {() => void} [deps.onMenu] MENU was pressed during a match.
+ * @param {() => void} [deps.onTutorialDone] the first-run panel was dismissed.
+ *   main.js writes it to the save; the panel itself never touches storage.
  */
-export function createUI({ towerKit, camera, onCardPick, onResult, onMenu }) {
+export function createUI({ towerKit, camera, onCardPick, onResult, onMenu, onTutorialDone }) {
   // Kept as variables, not arguments, because the lobby hands the deck over
   // after this returns: the lobby owns the pre-match screen and resolves the
   // hand when the player presses start, which is after boot. setDeck() then
@@ -390,6 +445,12 @@ export function createUI({ towerKit, camera, onCardPick, onResult, onMenu }) {
   const elixirFill = document.getElementById('elixirFill');
   const elixirNum = document.getElementById('elixirNum');
   const fx = document.getElementById('fx');
+  // The match clock and the first-run panel. Both are inert until main.js arms
+  // them: the clock stays hidden until it has a real second to print, and the
+  // panel is only ever opened by the boot path that decides a save is new.
+  const timerPill = document.getElementById('timerPill');
+  const timerNum = document.getElementById('timerNum');
+  const tutorial = document.getElementById('tutorial');
   const stageBadge = document.getElementById('stageBadge');
   const stageNum = document.getElementById('stageNum');
   const result = document.getElementById('result');
@@ -504,6 +565,97 @@ export function createUI({ towerKit, camera, onCardPick, onResult, onMenu }) {
     if (show && stageNum) stageNum.textContent = String(n);
   }
 
+  // --- match clock ---------------------------------------------------------
+  // match.js owns the clock; this only draws what it reports. Two sentinels for
+  // the same reason the elixir bar keeps them: update() runs every frame, and
+  // writing a string the DOM already holds costs a layout for no pixel.
+  let clockShown = -1;
+  let clockPhase = null;
+
+  function clockText(sec) {
+    const s = Math.max(0, Math.round(sec));
+    return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+  }
+
+  /**
+   * Draw the match clock. main.js feeds this from the match tick, which reports
+   * time REMAINING in both halves - match.js normalises overtime the same way -
+   * so one formatter and one countdown shape cover regulation and overtime.
+   * @param {number} seconds seconds left in this phase
+   * @param {'reg'|'ot'|'idle'|'done'} phase
+   */
+  function setTimer(seconds, phase) {
+    if (!timerPill) return;
+    // The first real second is what unhides it. A pill reading 3:00 on the menu
+    // would be a clock for a fight that has not started.
+    timerPill.classList.remove('off');
+    if (phase !== clockPhase) {
+      clockPhase = phase;
+      timerPill.classList.toggle('ot', phase === 'ot');
+    }
+    const s = Math.max(0, Math.round(seconds));
+    if (s !== clockShown) {
+      clockShown = s;
+      if (timerNum) timerNum.textContent = clockText(s);
+      // Under half a minute of regulation the number goes warm. Not in
+      // overtime, where the whole pill is already red for a bigger reason.
+      timerPill.classList.toggle('urgent', phase !== 'ot' && s <= 30);
+    }
+  }
+
+  /**
+   * Regulation is over. A kick on the pill rather than a new screen: the storm
+   * and the audio cue already say overtime has started.
+   */
+  function flashOvertime() {
+    if (!timerPill) return;
+    timerPill.classList.remove('flash');
+    // Forced reflow between the two writes, or the browser coalesces them into
+    // no change and the animation never restarts on a later match.
+    void timerPill.offsetWidth;
+    timerPill.classList.add('flash');
+  }
+
+  // --- first-run panel -----------------------------------------------------
+  // Opened by main.js (which owns the save) and dismissed by the player: the
+  // button, the dim backdrop, or Escape. Every dismissal reports once through
+  // onTutorialDone so the save records it and it is never offered again.
+  let tutorialOpen = false;
+
+  function onTutorialKey(e) {
+    if (e.key === 'Escape' || e.key === 'Enter' || e.key === ' ') hideTutorial();
+  }
+
+  /** Close the coaching panel. Returns true if it was open. */
+  function hideTutorial() {
+    if (!tutorialOpen) return false;
+    tutorialOpen = false;
+    if (tutorial) tutorial.classList.remove('on');
+    window.removeEventListener('keydown', onTutorialKey);
+    if (typeof onTutorialDone === 'function') onTutorialDone();
+    return true;
+  }
+
+  /** Open the coaching panel. Returns true if it was shown. */
+  function showTutorial() {
+    if (!tutorial || tutorialOpen) return false;
+    tutorialOpen = true;
+    tutorial.classList.add('on');
+    window.addEventListener('keydown', onTutorialKey);
+    return true;
+  }
+
+  const tutOk = document.getElementById('tutOk');
+  if (tutOk) tutOk.addEventListener('click', () => hideTutorial());
+  // A tap on the dim area counts as having read it. Deliberately forgiving: the
+  // panel is advice, and a player who dismisses it by tapping past it should not
+  // get it handed back to them.
+  if (tutorial) {
+    tutorial.addEventListener('click', (e) => {
+      if (e.target === tutorial) hideTutorial();
+    });
+  }
+
   /**
    * Reset the HUD result screen, confetti, and settled flag for a new match.
    */
@@ -517,6 +669,15 @@ export function createUI({ towerKit, camera, onCardPick, onResult, onMenu }) {
     }
     if (btnPlayAgain) btnPlayAgain.textContent = 'PLAY AGAIN';
     setStage(0);
+    // The clock goes back in its box with the rest of the match state. Until a
+    // new match reports a second, a leftover 0:00 would be a number about a
+    // fight that is already over.
+    clockShown = -1;
+    clockPhase = null;
+    if (timerPill) {
+      timerPill.classList.remove('ot', 'urgent', 'flash');
+      timerPill.classList.add('off');
+    }
     elixir = ELIXIR_MAX / 2;
     elixirShown = -1;
     elixirFillShown = -1;
@@ -722,6 +883,10 @@ export function createUI({ towerKit, camera, onCardPick, onResult, onMenu }) {
     update,
     setDeck,
     setStage,
+    setTimer,
+    flashOvertime,
+    showTutorial,
+    hideTutorial,
     popDamage,
     popDamageAt,
     showResult,

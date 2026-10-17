@@ -168,7 +168,7 @@ globalThis.localStorage = (() => {
   };
 })();
 
-const silent = { play() {}, unlock() {}, setMuted() {}, setMusic() {}, muted: false };
+const silent = { play() {}, unlock() {}, setMuted() {}, setMusic() {}, setScene() {}, muted: false };
 const mk = (opts = {}) => createLobby({ audio: silent, onStart: () => {}, ...opts });
 const cards = () => nodes.lobbyPick.children;
 const isLocked = (c) => c.className.includes('locked');

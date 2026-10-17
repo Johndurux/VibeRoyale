@@ -515,6 +515,13 @@ export function createLobby({ audio, onStart, onMenu }) {
   function show() {
     root.classList.add('on');
     document.body.classList.add('lobbying');
+    // The lobby is its own audio scene. main.js only ever moves the scene
+    // forward - battle on a match start, overtime when the clock runs out - so
+    // without this the way back never happens and the second match's countdown
+    // plays the last match's music: drums, battle tempo, and the crowd bed over
+    // the deck screen, which is the one screen that should not sound like a
+    // match in progress.
+    if (audio) audio.setScene('lobby');
     // Re-read on the way in. A match can have banked a stage clear, a level
     // and a streak while the overlay was hidden, and the padlocks, the stage
     // grid and the default stage all have to move with it.
