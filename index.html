@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>VIBEROYALE</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <!-- The game is deployed at /royale/ and this repo root has no other page, so
+       the bare domain used to answer with Vercel's 404 - anyone given the short
+       link got "The page could not be found" before they ever saw a battlefield.
+       The search and hash are carried across on purpose: the ?state= probe and
+       a deep link both survive the hop, and the <a> below is the fallback for a
+       browser that will not run the script. -->
+  <link rel="canonical" href="./royale/">
+  <script>location.replace('./royale/' + location.search + location.hash);</script>
+</head>
+<body style="margin:0;height:100vh;display:grid;place-items:center;background:#0b0e14;color:#e9e9ec;font:16px/1.6 system-ui,-apple-system,sans-serif">
+  <a style="color:#8ab4ff" href="./royale/">VIBEROYALE &mdash; enter the arena</a>
+</body>
+</html>
