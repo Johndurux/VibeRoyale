@@ -127,6 +127,8 @@ export function createLobby({ audio, onStart, onMenu }) {
   const diffHost = document.getElementById('lobbyDiff');
   const startBtn = document.getElementById('lobbyStart');
   const soundBtn = document.getElementById('lobbySound');
+  const volMusicEl = document.getElementById('volMusic');
+  const volSfxEl = document.getElementById('volSfx');
   const countEl = document.getElementById('lobbyCount');
   const countNum = document.getElementById('lobbyCountNum');
   const lvlNum = document.getElementById('lvLevelNum');
@@ -479,6 +481,30 @@ export function createLobby({ audio, onStart, onMenu }) {
       soundBtn.disabled = true;
     }
     paint();
+  }
+
+  // ── volume faders ────────────────────────────────────────────────────────
+  // Two levels over one mix. Each fader writes straight through to the audio
+  // module and is read back on entry, so the slider always shows what is
+  // actually playing rather than a value that only lives in the DOM.
+  for (const [el, kind] of [[volMusicEl, 'music'], [volSfxEl, 'sfx']]) {
+    if (!el) continue;
+    if (!audio) {
+      el.disabled = true;
+      continue;
+    }
+    el.value = String(Math.round(audio.volume[kind] * 100));
+    el.addEventListener('input', () => {
+      // A drag before any click would otherwise move a fader over silence.
+      audio.unlock();
+      audio.setVolume(kind, Number(el.value) / 100);
+    });
+    // One cue on release rather than one per pixel: the point of the fader is
+    // to hear the level you landed on.
+    el.addEventListener('change', () => {
+      audio.unlock();
+      if (!audio.muted) audio.play(kind === 'music' ? 'card' : 'hit');
+    });
   }
 
   // ── tab switching + the way back to the menu ─────────────────────────────

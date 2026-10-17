@@ -58,6 +58,7 @@ export function createAudio() {
   let sfxBus = null;         // one-shot effects
   let musicBus = null;       // the step-sequenced riff
   let bedBus = null;         // the persistent crowd bed
+  let bedVol = null;         // the music fader for that bed, downstream of the tremolo
   let noiseBuf = null;       // one-second white noise, shared by every burst
   let city = null;           // the live crowd source, when music is on
   let cityLfo = null;
@@ -69,12 +70,41 @@ export function createAudio() {
   let nextStep = 0;          // ctx time of the next scheduled step
   let stepN = 0;
   const lastByCue = new Map();
+  // Two player-facing faders over the fixed mix: 'music' turns the riff and the
+  // crowd bed down together, 'sfx' turns the one-shot cues down on their own.
+  // The bus gains above are the intended balance between the three groups; a
+  // fader scales that balance, it never replaces it.
+  let volMusic = 1;
+  let volSfx = 1;
 
-  // Restore a preference kept locally, so muting once stays muted next boot.
+  // Restore preferences kept locally, so muting once stays muted next boot.
   try {
     muted = localStorage.getItem('viberoyale.muted') === '1';
+    const m = parseFloat(localStorage.getItem('viberoyale.vol.music'));
+    const s = parseFloat(localStorage.getItem('viberoyale.vol.sfx'));
+    if (Number.isFinite(m)) volMusic = clamp01(m);
+    if (Number.isFinite(s)) volSfx = clamp01(s);
   } catch (e) {
     muted = false;
+  }
+
+  function clamp01(v) {
+    v = Number(v);
+    if (!Number.isFinite(v)) return 1;
+    return v < 0 ? 0 : v > 1 ? 1 : v;
+  }
+
+  /** Push the two faders onto the buses. Null-safe before unlock(). */
+  function applyVolume() {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    if (sfxBus) sfxBus.gain.setTargetAtTime(volSfx, t, 0.02);
+    if (musicBus) musicBus.gain.setTargetAtTime(0.75 * volMusic, t, 0.02);
+    // The bed fader sits *after* the tremolo, not on the node the tremolo
+    // modulates: bedBus.gain is being pushed around by an LFO, so a volume of
+    // zero written there would still swing +-0.02 and the crowd would hum at
+    // silence.
+    if (bedVol) bedVol.gain.setTargetAtTime(volMusic, t, 0.02);
   }
 
   /**
@@ -101,10 +131,14 @@ export function createAudio() {
       musicBus.connect(master);
       bedBus = ctx.createGain();
       bedBus.gain.value = 0.05;
-      bedBus.connect(master);
+      bedVol = ctx.createGain();
+      bedVol.gain.value = volMusic;
+      bedBus.connect(bedVol);
+      bedVol.connect(master);
       noiseBuf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
       const data = noiseBuf.getChannelData(0);
       for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+      applyVolume();
     } catch (e) {
       // No audio path: play() no-ops below. The game must never care.
       ctx = null;
@@ -419,14 +453,31 @@ export function createAudio() {
     } catch (e) {}
   }
 
+  /**
+   * Set one of the two faders. `kind` is 'music' or 'sfx'; the value is clamped
+   * to 0..1 and kept locally, so a level set once survives a reload.
+   */
+  function setVolume(kind, v) {
+    const val = clamp01(v);
+    if (kind === 'music') volMusic = val;
+    else if (kind === 'sfx') volSfx = val;
+    else return;
+    applyVolume();
+    try {
+      localStorage.setItem('viberoyale.vol.' + kind, String(val));
+    } catch (e) {}
+  }
+
   return {
     unlock,
     play,
     setScene,
     setMusic,
     setMuted,
+    setVolume,
     get ready() { return !!ctx; },
     get muted() { return muted; },
     get scene() { return scene; },
+    get volume() { return { music: volMusic, sfx: volSfx }; },
   };
 }

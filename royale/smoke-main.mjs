@@ -22,7 +22,10 @@ function ok(cond, label) {
 /** The tail of a module's return object, where its public surface lives. */
 function published(file) {
   const src = fs.readFileSync(path.join(root, file), 'utf8');
-  return src.slice(src.lastIndexOf('return {'));
+  // The surface is the top-level return that closes the module. It is anchored on
+  // its indentation, because an accessor that hands back an object literal holds
+  // the last "return {" in the file and would otherwise be read as the surface.
+  return src.slice(src.lastIndexOf('\n  return {'));
 }
 function has(ret, member) {
   return new RegExp('(^|[\\s{,])' + member + '\\b').test(ret);
@@ -38,7 +41,7 @@ console.log('\n== each module publishes the members main.js needs ==');
 const surface = {
   'ui.js': ['update', 'setDeck', 'popDamage', 'popDamageAt', 'showResult', 'spend', 'select', 'costOf', 'markAffordable', 'flashHint', 'elixir', 'selected', 'deck', 'reset', 'setTimer', 'flashOvertime', 'showTutorial', 'hideTutorial'],
   'vfx.js': ['root', 'update', 'setDeployZone', 'deployBurst', 'rubble', 'spellRing', 'spellBlast', 'liveCount'],
-  'audio.js': ['unlock', 'play', 'setMusic', 'setScene'],
+  'audio.js': ['unlock', 'play', 'setMusic', 'setScene', 'setMuted', 'setVolume'],
   'troops.js': ['root', 'troops', 'update', 'spawn', 'clear', 'blast', 'freezeArea', 'inRadius', 'MAX_TROOPS'],
   'towers.js': ['root', 'towers', 'update', 'reset', 'damageTower'],
   'bot.js': ['update', 'start', 'stop', 'setDifficulty', 'setElixirRate', 'setStage', 'difficulty'],

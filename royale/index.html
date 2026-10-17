@@ -640,6 +640,40 @@
     }
     .lv-sound:disabled { cursor: not-allowed; opacity: 0.6; }
 
+    /* Two faders over a fixed mix. The native range input is styled rather than
+       replaced with a div: it keeps keyboard, touch and screen-reader behaviour
+       for free, which a hand-rolled slider loses. */
+    .lv-vols { display: flex; gap: 10px; width: 100%; max-width: 330px; }
+    .lv-vol {
+      flex: 1; display: flex; align-items: center; gap: 6px;
+      font-family: var(--font); font-size: 9px; font-weight: 800;
+      letter-spacing: 1.5px; color: #6B4A12;
+    }
+    .lv-vol input[type="range"] {
+      flex: 1; height: 16px; margin: 0; cursor: pointer;
+      -webkit-appearance: none; appearance: none; background: transparent;
+    }
+    .lv-vol input[type="range"]:focus-visible { outline: 2px solid #C68A22; outline-offset: 2px; }
+    .lv-vol input[type="range"]::-webkit-slider-runnable-track {
+      height: 6px; border-radius: 3px;
+      background: linear-gradient(180deg, #E3CDA0, #FFF6E2);
+      border: 2px solid var(--vr-font-outline);
+    }
+    .lv-vol input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none; appearance: none;
+      width: 14px; height: 14px; margin-top: -6px; border-radius: 50%;
+      background: radial-gradient(circle at 35% 30%, #FFE9B8, #C68A22);
+      border: 2px solid var(--vr-font-outline);
+    }
+    .lv-vol input[type="range"]::-moz-range-track {
+      height: 6px; border-radius: 3px; background: #E3CDA0;
+    }
+    .lv-vol input[type="range"]::-moz-range-thumb {
+      width: 12px; height: 12px; border-radius: 50%; background: #FFE9B8;
+      border: 2px solid var(--vr-font-outline);
+    }
+    .lv-vol input[type="range"]:disabled { opacity: 0.5; cursor: not-allowed; }
+
     .lv-start {
       font-family: var(--font-num); font-size: 26px; line-height: 1;
       color: #FFF3CE; margin-top: 6px;
@@ -976,6 +1010,12 @@
         <div class="lv-headbtns">
           <button type="button" id="lobbyMenu" class="lv-sound">MENU</button>
           <button type="button" id="lobbySound" class="lv-sound">SOUND ON</button>
+        </div>
+        <div class="lv-vols">
+          <label class="lv-vol"><span>MUSIC</span>
+            <input type="range" id="volMusic" min="0" max="100" step="1" value="100" aria-label="Music volume"></label>
+          <label class="lv-vol"><span>SFX</span>
+            <input type="range" id="volSfx" min="0" max="100" step="1" value="100" aria-label="Effects volume"></label>
         </div>
       </div>
 
