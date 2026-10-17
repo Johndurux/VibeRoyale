@@ -348,11 +348,21 @@ head('recordMatch advances the campaign one stage at a time');
   assert.equal(prog.snapshot().stage, 1, 'a win cannot skip a stage');
 }
 
-head('the elixir leak window is a real number of seconds');
+head('the elixir economy has one definition, and advertises no leak');
 {
-  assert.ok(ELIXIR.leakAfter > 0 && ELIXIR.leakAfter < ELIXIR.period * 3,
-    'a leak warning longer than three drops would never be seen');
-  assert.ok(ELIXIR.leakAfter > ELIXIR.period, 'it should warn only after a bar has actually filled');
+  // The three numbers live in config.js and are re-exported by elixir.js so
+  // that the bar (ui.js) and the rival's bank (bot.js) cannot drift apart, and
+  // the one function that advances both is stepable from a test.
+  const ex = await import(src('elixir.js'));
+  assert.equal(ex.ELIXIR_MAX, ELIXIR.max, 'the shared ceiling is config\'s max');
+  assert.equal(ex.ELIXIR_START, ELIXIR.start, 'both sides open on config\'s start');
+  assert.ok(ex.ELIXIR_PERIOD > 0, 'a drop takes a real number of seconds');
+  assert.ok(ex.regen(0, ELIXIR.period, 1) > 0, 'a period of waiting buys elixir');
+  assert.equal(ex.regen(ELIXIR.max, 1, 4), ELIXIR.max, 'a full bar stays full however fast it is being poured');
+  // A full bar leaking after a while was a design note, never a mechanic: the
+  // number sat in config with FEATURES.elixirLeak pointing at it and nothing in
+  // src/ read either. Both are gone. This is where one of them would come back.
+  assert.equal('leakAfter' in ELIXIR, false, 'no leak window is advertised while no leak exists');
 }
 
 head('a match banks XP and the streak responds to the outcome');

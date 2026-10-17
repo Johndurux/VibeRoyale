@@ -892,7 +892,11 @@
         <div class="brand-text">VIBEROYALE<span>THE ARENA</span></div>
       </div>
       <div class="tag" id="stageBadge" style="display:none">STAGE <b id="stageNum">1</b></div>
-      <div class="tag">PHASE <b>02</b> &middot; CARD PLAY</div>
+      <!-- A "PHASE 02 - CARD PLAY" tag used to sit here. The game has no build
+           phase to be in, and nothing ever read that label, so it was a claim
+           the code could not back - retired rather than wired, because there is
+           no phase to wire it to. Actual state lives in #stageBadge and the
+           clock pill beside it, both driven from the match. -->
       <!-- Armed by main.js's clock, drawn by ui.setTimer(). Hidden until then -
            see the .tag.timer rule. -->
       <div class="tag timer off" id="timerPill">

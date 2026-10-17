@@ -351,7 +351,9 @@ const spells = buildSpells({
 const bot = createBot({
   troops,
   towers: towerKit.towers,
-  spells,
+  // The rival's spell hand follows the same switch as the player's: with
+  // FEATURES.spells off it is handed null and its spell branch stays shut.
+  spells: FEATURES.spells ? spells : null,
   difficulty: 'normal',
   // The rival's plays are audible so the player can read a counter from sound
   // alone when the far bank is off screen.
@@ -451,6 +453,14 @@ function deploy(clientX, clientY) {
   // must still be able to throw a fireball. Otherwise the player is holding
   // the card, has the elixir, taps a legal spot, and nothing happens.
   if (card.spell) {
+    // Spells are a feature, and a spent card is not a way to find that out.
+    // With FEATURES.spells off ui.js leaves the spell chips off the bar
+    // entirely, so this is the backstop for a call that arrives anyway.
+    if (!FEATURES.spells) {
+      ui.flashHint('SPELLS OFF');
+      audio.play('deny');
+      return;
+    }
     // Paid before the cast is launched, not after. spells.cast() throws the
     // projectile there and then - the effect resolves a beat later - so a spend
     // that failed after it left the wand anyway landed an UNPAID spell on the
@@ -606,11 +616,17 @@ function animate() {
   // the match over. This is the single gate; there is no second one to forget.
   if (matchLive) {
     matchClock.update(dt);
-    bot.update(dt);
+    // Both sides read their income off the clock for the frame, so a phase
+    // change (overtime doubling elixir) reaches the player's bar and the rival's
+    // bank on the same tick. Passing the multiplier is the whole wiring: the
+    // clock publishes it, the two spenders ask for it, and nothing else has to
+    // know which phase the match is in.
+    const elixirMult = matchClock.elixirMult;
+    bot.update(dt, elixirMult);
     troops.update(dt);
-    ui.update(dt);
+    ui.update(dt, elixirMult);
     const selCard = ui.selected ? CHARACTERS.find((c) => c.id === ui.selected) : null;
-    vfx.setDeployZone(!!(selCard && !selCard.spell));
+    vfx.setDeployZone(FEATURES.deployZone && !!(selCard && !selCard.spell));
   } else {
     vfx.setDeployZone(false);
   }
@@ -672,7 +688,11 @@ function endMatch(result) {
   // recordMatch returns what the match was worth: the XP total, the stage it
   // cleared, the level it landed on, the streak tier and the cards it opened.
   // It is booked exactly once, here, and only on a match that reached a result.
-  const banked = progression.recordMatch({
+  //
+  // With FEATURES.progression off the match is still played, still settled and
+  // still reported - it simply banks nothing, and blankBooking() says so in the
+  // same shape, so no reader of `banked` has to know which happened.
+  const banked = !FEATURES.progression ? progression.blankBooking() : progression.recordMatch({
     won,
     // A casual match books against stage 0: STAGES has no row there, so the
     // clear and its bonus are structurally unreachable while wins, streaks
@@ -793,9 +813,9 @@ function startMatch(stage, deck, opts = {}) {
   currentStage = cfg.stage;
 
   ui.setDeck(deck);
-  // The HUD's own per-match state - the selected card, the elixir-leak timer,
-  // any result overlay - is cleared here rather than reloaded, so a second
-  // match starts from the same state the first one did.
+  // The HUD's own per-match state - the selected card, any result overlay -
+  // is cleared here rather than reloaded, so a second match starts from the
+  // same state the first one did.
   if (ui.reset) ui.reset();
   // The stage badge is a campaign claim; a quick battle wears none.
   ui.setStage(casual ? 0 : currentStage);

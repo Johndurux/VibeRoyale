@@ -13,7 +13,7 @@
 // UI layer decides what a win looks like and this file never learns what a
 // result screen is.
 
-import { MATCH, ELIXIR } from './config.js';
+import { FEATURES, MATCH } from './config.js';
 
 /**
  * @param {object} deps
@@ -87,9 +87,18 @@ export function createMatch({ towers, onTick = null, onOvertime = null, onEnd = 
           // overshoot is invisible, but an unclamped accumulator would carry
           // the error into overtime and start that 60s late as well.
           elapsed = MATCH.regular;
-          phase = 'ot';
-          otElapsed = 0;
-          if (onOvertime) onOvertime({ elixirMult: MATCH.elixirMult });
+          // Regulation can be the whole match. With FEATURES.overtime off the
+          // horn settles it on the same sudden-death rule that would have
+          // decided it a minute later, so the referee is unchanged and the
+          // extra minute is simply not played. Turning the flag on again needs
+          // no other edit: this is the only place a phase changes.
+          if (!FEATURES.overtime) {
+            finish(suddenDeath());
+          } else {
+            phase = 'ot';
+            otElapsed = 0;
+            if (onOvertime) onOvertime({ elixirMult: MATCH.elixirMult });
+          }
         }
       } else {
         otElapsed += dt;
@@ -143,10 +152,16 @@ export function createMatch({ towers, onTick = null, onOvertime = null, onEnd = 
     },
 
     /**
-     * Elixir regen multiplier for the current phase. Read by ui.js on every
-     * frame, which is why it is a getter rather than an event: the HUD has to
-     * be able to ask "how fast should the bar fill right now" without
-     * tracking transitions itself.
+     * Elixir regen multiplier for the current phase, 1 in regulation and
+     * MATCH.elixirMult in overtime.
+     *
+     * main.js reads this once per frame and hands the same number to both
+     * spenders - ui.update(dt, elixirMult) for the player's bar and
+     * bot.update(dt, elixirMult) for the rival's bank. It is a getter rather
+     * than an event because the HUD has to be able to ask "how fast should the
+     * bar fill right now" without tracking transitions itself, and it is read
+     * by callers rather than by this file because the clock has no business
+     * knowing what a bar is.
      * @returns {number}
      */
     get elixirMult() {
@@ -159,8 +174,5 @@ export function createMatch({ towers, onTick = null, onOvertime = null, onEnd = 
     get phase() { return phase; },
     // Seconds elapsed in total, for the result screen's duration line.
     get elapsed() { return elapsed + otElapsed; },
-    // The economy constants, re-exported so ui.js has one import for "how the
-    // bar behaves" instead of reaching into config.js for a second opinion.
-    get elixirPeriod() { return ELIXIR.period; },
   };
 }

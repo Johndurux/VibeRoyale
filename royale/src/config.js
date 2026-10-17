@@ -92,10 +92,6 @@ export const ELIXIR = {
   max: 10,
   period: 2.8,     // seconds per drop
   start: 5,        // both sides open on half a bar
-  // A full bar that stays full is elixir being wasted. Three seconds is long
-  // enough that a player mid-decision is never nagged, and short enough that
-  // idling through a full bar does not go unnoticed.
-  leakAfter: 3,
 };
 
 // ── match clock ───────────────────────────────────────────────────────────
@@ -214,21 +210,30 @@ export const STAGE_UNLOCKS = {
 // so turning one off removes its behaviour rather than hiding it behind a
 // guard that can still be reached by a direct call.
 export const FEATURES = {
-  matchTimer: true,
-  overtime: true,
-  tutorial: true,
-  longPressTips: true,
-  progression: true,
-  spells: true,
-  targeting: true,
-  elixirLeak: true,
-  deployVfx: true,
-  towerShatter: true,
-  screenShake: true,
-  dynamicSky: true,
-  lobbyMusic: true,
-  deployZone: true,
-  haptics: true,
+  // Every switch below is read by a live `if`, in the file that owns the
+  // system, so turning one off retires that system and nothing else. That is
+  // the whole contract: a flag nothing asks about is a kill-switch that does
+  // not exist, and this table used to advertise ten of them. Four were pure
+  // fiction and were deleted: `elixirLeak` (no leak was ever built, and the
+  // ELIXIR.leakAfter number it pointed at was read by nobody either) and
+  // `deathShake`/`deathShatter`/`deathWreck`, which shadowed the real tower
+  // death sequence - that runs on the TOWERS timings of the same names and is
+  // already gated by towerShatter and screenShake, so the three flags switched
+  // nothing at all.
+  matchTimer: true,     // ui.js - the clock pill. Off retires the pill, not the clock.
+  overtime: true,       // match.js - off ends regulation on sudden death instead
+  tutorial: true,       // main.js - the first-match card
+  longPressTips: true,  // ui.js - hold a card to read it
+  progression: true,    // main.js - off means a match banks nothing
+  spells: true,         // main.js + ui.js - off retires the spell cards
+  targeting: true,      // troops.js - off means every unit fights 'nearest'
+  deployVfx: true,      // main.js - the burst under a deployed unit
+  deployZone: true,     // main.js - the ring under a selected card
+  towerShatter: true,   // main.js - towers break apart instead of vanishing
+  screenShake: true,    // main.js - the camera kick on a king fall
+  dynamicSky: true,     // main.js - the light changes with the match
+  lobbyMusic: true,     // main.js - scene changes, and silence with them
+  haptics: true,        // main.js - vibration, where the device has any
 };
 
 // ── towers ────────────────────────────────────────────────────────────────

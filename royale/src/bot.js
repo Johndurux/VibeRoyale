@@ -18,6 +18,11 @@
 import { ARENA, CARDS, STAGE_UNLOCKS } from './config.js';
 import { CHARACTERS } from './characters.js';
 import { passable } from './troops.js';
+// The rival's bank is the same economy as the player's: same cap, same period,
+// same opening half-bar, stepped by the same regen(). It used to hold its own
+// copy of all three, and that copy is why the overtime multiplier in config.js
+// was read by nobody.
+import { ELIXIR_START, regen } from './elixir.js';
 
 // The enemy's deployment half is the mirror of main.js's: -Z, and the same
 // insets off the edges. These are duplicated rather than imported because
@@ -29,10 +34,10 @@ const DEPLOY_FAR_Z = ARENA.halfLength - 1.2;
 const DEPLOY_EDGE = ARENA.halfWidth - 1.0;
 const KING_CLEARANCE = 3.4;
 
-// Elixir economy, matched to ui.js on purpose: same cap, same period, same
-// opening half-bar. The bot starts with the same resources the player does.
-const ELIXIR_MAX = 10;
-const ELIXIR_PERIOD = 2.8;
+// Elixir economy. No numbers here any more: elixir.js holds the cap, the period
+// and the opening half-bar for both sides, so the rival cannot drift from the
+// player's income. It had its own copy once, and that is how overtime came to
+// double the clock while both bars kept filling at the regulation rate.
 
 // A player troop this far onto the enemy half is a problem, not scenery. The
 // bridge mouth is at z = 0, so anything past ~1 has committed to the crossing.
@@ -123,7 +128,7 @@ export function createBot({ troops, towers, spells = null, deck = null, difficul
   // stage over the previous one.
   let knobs = level;
   let stageNum = 0;
-  let elixir = ELIXIR_MAX / 2;
+  let elixir = ELIXIR_START;
   let elixirRate = 1; // stage scaling; 1 keeps the bot on the player's income
   let thinkIn = rand(knobs.think[0], knobs.think[1]);
   let live = false;
@@ -444,12 +449,20 @@ export function createBot({ troops, towers, spells = null, deck = null, difficul
 
   // ── public ───────────────────────────────────────────────────────────────
   return {
-    /** Advance the clock. dt only; the bot never reads a frame directly. */
-    update(dt) {
+    /**
+     * Advance the clock. dt only; the bot never reads a frame directly.
+     *
+     * @param {number} dt seconds this frame covered
+     * @param {number} [elixirMult] the phase's regen multiplier - main.js hands
+     *   it matchClock.elixirMult, so the rival's bank doubles in overtime
+     *   exactly like the player's bar. Both sides get the same income in every
+     *   phase: an opponent with a bigger budget is a rigged one, not a hard one.
+     */
+    update(dt, elixirMult = 1) {
       if (!live) return;
       matchT += dt;
       sinceDeploy += dt;
-      elixir = Math.min(ELIXIR_MAX, elixir + (dt / ELIXIR_PERIOD) * elixirRate);
+      elixir = regen(elixir, dt * elixirRate, elixirMult);
       enforcePresence();
       thinkIn -= dt;
       if (thinkIn > 0) return;
@@ -459,7 +472,7 @@ export function createBot({ troops, towers, spells = null, deck = null, difficul
 
     /** Arm the bot and reset its bank, at the moment the match goes live. */
     start() {
-      elixir = ELIXIR_MAX / 2;
+      elixir = ELIXIR_START;
       thinkIn = rand(1.2, 2.2);
       sinceDeploy = 0;
       matchT = 0;

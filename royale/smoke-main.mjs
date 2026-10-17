@@ -44,7 +44,7 @@ const surface = {
   'bot.js': ['update', 'start', 'stop', 'setDifficulty', 'setElixirRate', 'setStage', 'difficulty'],
   'lobby.js': ['hide', 'show', 'deck', 'stage'],
   'menu.js': ['hide', 'show'],
-  'match.js': ['update', 'remaining', 'settle', 'start', 'stop', 'elixirMult', 'isOvertime', 'isLive', 'isDone', 'phase', 'elapsed', 'elixirPeriod'],
+  'match.js': ['update', 'remaining', 'settle', 'start', 'stop', 'elixirMult', 'isOvertime', 'isLive', 'isDone', 'phase', 'elapsed'],
   'spells.js': ['cast'],
 };
 for (const [file, members] of Object.entries(surface)) {
@@ -150,13 +150,102 @@ const loop = main.slice(main.indexOf('function animate('));
 const cut = loop.indexOf('renderer.render(scene, camera);');
 const head = loop.slice(0, cut);
 ok(head.includes('matchClock.update(dt)'), 'the clock ticks inside the live gate');
-ok(head.includes('bot.update(dt)') && head.includes('troops.update(dt)') && head.includes('ui.update(dt)'), 'bot, troops and ui tick inside the gate');
+ok(/bot\.update\(dt, elixirMult\)/.test(head) && head.includes('troops.update(dt)'), 'bot and troops tick inside the gate');
+ok(/ui\.update\(dt, elixirMult\)/.test(head), 'the HUD ticks inside the gate, with the frame\'s elixir multiplier');
+ok(
+  head.indexOf('const elixirMult = matchClock.elixirMult') < head.indexOf('bot.update(dt, elixirMult)') &&
+  head.indexOf('const elixirMult = matchClock.elixirMult') < head.indexOf('ui.update(dt, elixirMult)'),
+  'both spenders read the multiplier after the clock advanced, not before'
+);
+ok(!/\b(?:bot|ui)\.update\(dt\)/.test(head), 'neither spender is left on the bare dt-only call');
 ok(!/\{\s*bot\.update/.test(head) || head.indexOf('matchClock.update') < head.indexOf('bot.update'), 'the clock advances first, so a timeout settles before the bot acts');
 ok(loop.includes('vfx.update(dt)'), 'vfx updates');
 ok(loop.includes('updateShake(dt)'), 'the camera shake updates');
 ok(loop.includes('updateSky(dt)'), 'the sky updates');
 ok(/\btowerKit\.update\(dt\b/.test(loop), 'the towers keep updating');
 ok(head.indexOf('vfx.update') > head.indexOf('matchLive'), 'vfx runs for every frame, live or not, so a collapse finishes after the match ends');
+
+console.log('\n== the elixir economy has one definition, and both sides use it ==');
+// The bug this section exists for: match.js published elixirMult, config.js
+// declared that overtime doubles elixir, match.js's own comment claimed the HUD
+// read it every frame - and ui.js and bot.js each carried their own copy of the
+// cap and the period instead, so the multiplier reached nobody and overtime
+// doubled nothing but the clock. These are source-level guards; the runtime
+// proof that both bars actually double lives in test/match-loop.test.mjs.
+const botSrc = fs.readFileSync(path.join(root, 'bot.js'), 'utf8');
+const elixirSrc = fs.readFileSync(path.join(root, 'elixir.js'), 'utf8');
+const cfgSrc = fs.readFileSync(path.join(root, 'config.js'), 'utf8');
+for (const [label, src] of [['ui.js', uiSrc], ['bot.js', botSrc]]) {
+  ok(/import \{[^}]*\bregen\b[^}]*\} from '\.\/elixir\.js';/.test(src), label + ' steps its bar with the shared regen()');
+  ok(!/const\s+ELIXIR_PERIOD\s*=/.test(src), label + ' holds no period of its own');
+  ok(!/const\s+ELIXIR_MAX\s*=/.test(src), label + ' holds no cap of its own');
+  ok(/\bregen\(elixir,/.test(src), label + ' regenerates through regen()');
+  // The call has to hand the multiplier over, not just call the right function.
+  // This is the whole bug: the shared period alone still fills both bars at the
+  // regulation rate in overtime. Swapping the third argument for a 1 has to
+  // fail here, and the runtime half of that claim is asserted in
+  // test/match-loop.test.mjs, where the rival's bank is measured per frame.
+  ok(/\bregen\(elixir,[^)]*\belixirMult\)/.test(src), label + ' passes the phase multiplier into regen()');
+}
+ok(/import \{ ELIXIR \} from '\.\/config\.js';/.test(elixirSrc), 'elixir.js takes its numbers from config.js');
+for (const f of ['max', 'period', 'start']) {
+  ok(new RegExp('export const ELIXIR_[A-Z]+ = ELIXIR\\.\\w+;').test(elixirSrc), 'elixir.js re-exports the config field it reads: ' + f);
+}
+ok(/export function regen\(current, dt, mult = 1\)/.test(elixirSrc), 'regen() takes the phase multiplier as its third argument');
+ok(/function update\(dt = 0, elixirMult = 1\)/.test(uiSrc), 'ui.update accepts the multiplier');
+ok(/update\(dt, elixirMult = 1\)/.test(botSrc), 'bot.update accepts the multiplier');
+ok(!/elixirPeriod/.test(main) && !/elixirPeriod/.test(fs.readFileSync(path.join(root, 'match.js'), 'utf8')), 'the unread elixirPeriod getter is gone rather than advertised');
+ok(/elixirMult: 2,/.test(cfgSrc), 'config still declares the overtime multiplier that is now read');
+
+console.log('\n== every FEATURES switch is a switch, and every switch is read ==');
+// A flag nobody asks about is a kill-switch that does not exist, and this table
+// shipped ten of those: the code ran unguarded while config promised it could
+// be turned off. So the table is checked against the code, key by key, rather
+// than spot-checked: each flag has to appear as `FEATURES.<key>` somewhere
+// outside config.js, and each one has to sit in an `if`, where turning it off
+// actually removes the behaviour instead of hiding it.
+const featBlock = cfgSrc.slice(cfgSrc.indexOf('export const FEATURES'), cfgSrc.indexOf('};', cfgSrc.indexOf('export const FEATURES')));
+const flagKeys = [...featBlock.matchAll(/^\s{2}([A-Za-z_$][\w$]*)\s*:/gm)].map((m) => m[1]);
+const srcFiles = fs.readdirSync(root).filter((f) => f.endsWith('.js'));
+const srcAll = Object.fromEntries(srcFiles.map((f) => [f, fs.readFileSync(path.join(root, f), 'utf8')]));
+ok(flagKeys.length >= 8, flagKeys.length + ' switches are declared');
+for (const key of flagKeys) {
+  const owners = srcFiles.filter((f) => f !== 'config.js' && new RegExp('FEATURES\\.' + key + '\\b').test(srcAll[f]));
+  ok(owners.length > 0, key + ' is read' + (owners.length ? ' in ' + owners.join(', ') : ' NOWHERE - dead flag'));
+  // Read is not enough: it has to be read as a condition, on a line that
+  // branches on it. `if (...)`, `a && b` and `x ? y : z` all qualify; a plain
+  // `FEATURES.thing` passed as a value would not, because a value nobody
+  // branches on cannot turn anything off.
+  const branched = owners.some((f) => srcAll[f].split('\n').some((ln) => ln.includes('FEATURES.' + key) && /if \(|\?|&&|\|\|/.test(ln)));
+  ok(branched, key + ' is branched on, so off means off');
+}
+// The four that were deleted rather than left advertised. Checked as skips in
+// the FEATURES block and as reads, never as bare words: TOWERS owns live timing
+// keys called deathShake/deathShatter/deathWreck, and this file's comment names
+// the dead flags, so a word-grep would convict the wrong thing.
+for (const ghost of ['elixirLeak', 'deathShake', 'deathShatter', 'deathWreck']) {
+  ok(!new RegExp('^\\s+' + ghost + '\\s*:', 'm').test(featBlock) && !new RegExp('FEATURES\\.' + ghost + '\\b').test(cfgSrc + main + uiSrc + botSrc),
+    'the dead flag ' + ghost + ' has not come back as a switch');
+}
+ok(/deathShake\s*:/.test(cfgSrc) && /TOWERS\.deathShake/.test(fs.readFileSync(path.join(root, 'towers.js'), 'utf8')),
+  'the death-timing keys that share those names are TOWERS constants, and stay');
+ok(!/leakAfter\s*:/.test(cfgSrc), 'ELIXIR.leakAfter is gone with the flag that pointed at it');
+// The two switches that carry a whole system, and where they are read.
+ok(/if \(!FEATURES\.overtime\) \{\s*finish\(suddenDeath\(\)\);/.test(fs.readFileSync(path.join(root, 'match.js'), 'utf8')),
+  'overtime off settles regulation on the sudden-death rule rather than just skipping the minute');
+ok(/!FEATURES\.progression \? progression\.blankBooking\(\)/.test(main) && /export function blankBooking\(\)/.test(fs.readFileSync(path.join(root, 'progression.js'), 'utf8')),
+  'progression off banks nothing and still returns a full booking');
+ok(/if \(!FEATURES\.spells\)/.test(main) && /if \(!FEATURES\.spells && c\.spell\) return;/.test(uiSrc),
+  'spells off is refused at the cast and hidden on the bar, so no dead chip is offered');
+ok(/FEATURES\.targeting && t\.card && t\.card\.targetPriority/.test(fs.readFileSync(path.join(root, 'troops.js'), 'utf8')),
+  'targeting off drops every unit back to nearest');
+// The top bar is a claim about the match, so every tag in it has to be driven by
+// something. "PHASE 02 - CARD PLAY" was a static label for a build phase this
+// game does not have, and no code ever touched it; it was retired rather than
+// wired, because there is no phase to wire it to. `html` is the index.html read
+// at the top of this file, where the HUD contract checks live.
+ok(!/<div class="tag">PHASE/.test(html), 'no static phase claim sits in the top bar');
+ok(/id="stageBadge"/.test(html) && /setStage/.test(uiSrc), '#stageBadge is the one stage claim, and ui.setStage draws it');
 
 console.log('\n== settlement has one gate ==');
 const endBody = main.slice(main.indexOf('function endMatch('), main.indexOf('function startMatch('));

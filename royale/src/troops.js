@@ -7,7 +7,7 @@
 // dies, so main.js stays a wiring diagram and towers.js stays about towers.
 
 import * as THREE from 'three';
-import { CARDS, ARENA } from './config.js';
+import { CARDS, ARENA, FEATURES } from './config.js';
 import { damageTower, hpColour } from './towers.js';
 import { decoBox } from './voxel.js';
 
@@ -324,8 +324,10 @@ function makeTroop(card, stats, x, z, side) {
  */
 function pickTarget(t, troops, towers) {
   // The card's own declared priority, defaulting to the historical behaviour
-  // so any card without the field keeps working.
-  const mode = (t.card && t.card.targetPriority) || 'nearest';
+  // so any card without the field keeps working. FEATURES.targeting off drops
+  // every card back to that default - the units still fight, they just stop
+  // being choosy about what, which is what the switch claims to do.
+  const mode = (FEATURES.targeting && t.card && t.card.targetPriority) || 'nearest';
 
   // A buildings-only unit walks past the scuffle - but it must fight whatever
   // is already inside its own weapon's reach. Two siege bodies meeting

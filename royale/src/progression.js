@@ -257,6 +257,34 @@ export function recordMatch({ won, stage = 0, difficulty, towersDestroyed = 0, d
 }
 
 /**
+ * The booking a match nobody recorded returns.
+ *
+ * Same shape as recordMatch's, all zeros, and it exists so main.js can retire
+ * the career with FEATURES.progression off without the result screen having to
+ * tell "earned nothing" apart from "field missing". Every number here is a
+ * read of the career as it stands: nothing was added, so nothing moved.
+ *
+ * @returns {object}
+ */
+export function blankBooking() {
+  return {
+    base: 0,
+    towerBonus: 0,
+    streakBonus: 0,
+    stageBonus: 0,
+    stageCleared: false,
+    clearedStage: mem.stage,
+    total: 0,
+    level: mem.level,
+    previousLevel: mem.level,
+    leveledUp: false,
+    streak: mem.streak,
+    tier: streakTier(mem.streak),
+    unlocked: [],
+  };
+}
+
+/**
  * The banner a streak earns, or '' for none.
  * @param {number} streak
  * @returns {string} 'onfire' | 'hot' | ''

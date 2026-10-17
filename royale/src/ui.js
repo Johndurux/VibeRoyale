@@ -12,6 +12,9 @@ import * as THREE from 'three';
 import { CHARACTERS } from './characters.js';
 import { hpColour } from './towers.js';
 import { RARITY, CARDS, SPELLS, FEATURES } from './config.js';
+// The elixir numbers and the regeneration step, shared with the rival's bank.
+// See elixir.js for why the two private copies were folded into one.
+import { ELIXIR_MAX, ELIXIR_START, regen } from './elixir.js';
 
 // Portrait resolution. Over-sampled against the ~46px the face is displayed at
 // so the voxel steps stay crisp instead of aliasing into mush. Exported
@@ -86,12 +89,16 @@ function drawSpellGlyph(ctx, char) {
 const ROWS = ['KING', 'LEFT', 'RIGHT'];
 
 // Elixir economy. One drop every ELIXIR_PERIOD seconds, capped at ten - the
-// rate Clash Royale actually uses. It regenerates for real here rather than
-// sitting as a decorative number, and spend() is the only way it goes down, so
-// the bar is a genuine resource: a number that ticks up and can never be
-// lowered would be a lie told by the HUD.
-const ELIXIR_MAX = 10;
-const ELIXIR_PERIOD = 2.8;
+// rate Clash Royale actually uses, declared in config.js and stepped by
+// elixir.js. It regenerates for real here rather than sitting as a decorative
+// number, and spend() is the only way it goes down, so the bar is a genuine
+// resource: a number that ticks up and can never be lowered would be a lie told
+// by the HUD.
+//
+// The rate is not fixed, though: update() takes the phase multiplier, and
+// main.js hands it matchClock.elixirMult every frame, so overtime fills the bar
+// twice as fast. A local copy of the period here is how that multiplier went
+// unread for as long as it existed.
 
 // How close to a whole drop counts as reaching it. Accumulating dt/ELIXIR_PERIOD
 // lands on values like 9.99999999999964, and Math.floor would floor that to 9 -
@@ -209,6 +216,10 @@ function buildRoster(host, hint, onCardPick, deck) {
   const shown = list || CHARACTERS;
 
   shown.forEach((c) => {
+    // A spell card with FEATURES.spells off is a chip that cannot do anything
+    // when tapped - main.js refuses the cast - so it is left off the bar
+    // rather than offered and denied.
+    if (!FEATURES.spells && c.spell) return;
     const unlocked = c.unlocked !== false;
     // Falls back to common so a character added without a rarity still renders
     // a valid card rather than falling through to a transparent border.
@@ -488,7 +499,7 @@ export function createUI({ towerKit, camera, onCardPick, onResult, onMenu, onTut
   // one had nowhere to live and the bar jumped a full 10% step at a time. The
   // fraction IS the accumulator, so a frame spike adds the time it really
   // covered and can never swallow a drop.
-  let elixir = ELIXIR_MAX / 2;
+  let elixir = ELIXIR_START;
   let elixirShown = -1;
   // Tracked separately from elixirShown because the number only changes on a
   // whole drop while the fill moves every frame.
@@ -585,7 +596,12 @@ export function createUI({ towerKit, camera, onCardPick, onResult, onMenu, onTut
    * @param {'reg'|'ot'|'idle'|'done'} phase
    */
   function setTimer(seconds, phase) {
-    if (!timerPill) return;
+    // FEATURES.matchTimer off retires the pill and nothing else: the clock in
+    // match.js still runs, overtime still starts and sudden death still
+    // decides, because a hidden clock is a HUD choice, not a rule. The pill
+    // ships with the `off` class in index.html and only this function clears
+    // it, so doing nothing here is exactly "no clock on screen".
+    if (!timerPill || !FEATURES.matchTimer) return;
     // The first real second is what unhides it. A pill reading 3:00 on the menu
     // would be a clock for a fight that has not started.
     timerPill.classList.remove('off');
@@ -608,7 +624,7 @@ export function createUI({ towerKit, camera, onCardPick, onResult, onMenu, onTut
    * and the audio cue already say overtime has started.
    */
   function flashOvertime() {
-    if (!timerPill) return;
+    if (!timerPill || !FEATURES.matchTimer) return;
     timerPill.classList.remove('flash');
     // Forced reflow between the two writes, or the browser coalesces them into
     // no change and the animation never restarts on a later match.
@@ -678,7 +694,7 @@ export function createUI({ towerKit, camera, onCardPick, onResult, onMenu, onTut
       timerPill.classList.remove('ot', 'urgent', 'flash');
       timerPill.classList.add('off');
     }
-    elixir = ELIXIR_MAX / 2;
+    elixir = ELIXIR_START;
     elixirShown = -1;
     elixirFillShown = -1;
     if (roster) {
@@ -757,7 +773,10 @@ export function createUI({ towerKit, camera, onCardPick, onResult, onMenu, onTut
     showResult(won, payload.reason, payload);
   }
 
-  function update(dt = 0) {
+  // The ELIXIR_MAX eps-clamp lives in the shared regen(), and the fill uses
+  // ELIXIR_MAX below; the period itself is never read here any more, which is
+  // deliberate - a second opinion about the rate is the bug this file just lost.
+  function update(dt = 0, elixirMult = 1) {
     for (const side of sides) {
       for (let i = 0; i < side.ref.refs.length; i++) {
         const t = side.towers[i];
@@ -789,11 +808,12 @@ export function createUI({ towerKit, camera, onCardPick, onResult, onMenu, onTut
       }
     }
 
-    // Elixir regen. Dividing by the period turns dt straight into a fraction of
-    // a drop, so the fill creeps continuously and no separate remainder counter
-    // is needed. MAX_DT in main.js already caps a backgrounded tab's delta.
+    // Elixir regen. regen() turns dt straight into a fraction of a drop, so the
+    // fill creeps continuously and no separate remainder counter is needed.
+    // MAX_DT in main.js already caps a backgrounded tab's delta. The multiplier
+    // is the phase's: 1 in regulation, 2 in overtime, read off the live clock.
     if (dt > 0 && elixir < ELIXIR_MAX) {
-      elixir = Math.min(ELIXIR_MAX, elixir + dt / ELIXIR_PERIOD);
+      elixir = regen(elixir, dt, elixirMult);
     }
     // Snap to the whole drop it has effectively reached, so the number and the
     // fill can never show different states at the cap.
